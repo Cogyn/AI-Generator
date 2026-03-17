@@ -42,6 +42,7 @@ export async function callLLM(
     body: JSON.stringify({
       model,
       max_tokens: 1024,
+      response_format: { type: "json_object" },
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userMessage },

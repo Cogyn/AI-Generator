@@ -11,38 +11,65 @@ export function buildPromptContext(
 
 export function buildPlannerSystemPrompt(userPrompt: string, scene: Scene): string {
   const n = scene.primitives.length;
-  return `Du bist ein 3D-Struktur-Planer. Du erstellst einen schrittweisen Plan, um ein Objekt aus einfachen Cubes aufzubauen.
-Jeder Schritt soll genau ein Cube-Primitive hinzufügen.
+  return `You are a 3D structure planner. You create step-by-step build plans using only cube primitives.
 
-Aktueller Zustand: ${n} Primitives in der Szene.
-User-Wunsch: "${userPrompt}"
+COORDINATE SYSTEM:
+- x = left/right, y = up (height), z = forward/back
+- y=0 is the ground. Objects sit ON the ground (y >= 0).
+- position is the CENTER of each cube.
+- A cube with size [2, 1, 2] at position [0, 0.5, 0] sits flat on the ground.
 
-Antworte NUR mit validem JSON (kein Markdown, kein Codeblock):
-{"goal": "...", "estimatedSteps": N, "steps": ["Schritt 1 Beschreibung", ...]}`;
+RULES:
+- Each step adds exactly ONE cube.
+- Keep it simple: 5-7 steps for a basic object.
+- Steps should be ordered logically (e.g. tabletop first, then legs OR legs first then tabletop).
+
+Current scene: ${n} primitives.
+User request: "${userPrompt}"
+
+Respond with ONLY valid JSON, no markdown, no code blocks:
+{"goal": "short goal description", "estimatedSteps": 5, "steps": ["step 1 description", "step 2 description", ...]}
+
+EXAMPLE for "Build a table":
+{"goal": "Build a simple table from cubes", "estimatedSteps": 5, "steps": ["Create tabletop", "Add front-left leg", "Add front-right leg", "Add back-left leg", "Add back-right leg"]}`;
 }
 
 export function buildBuilderSystemPrompt(context: PromptContext): string {
-  const stepDesc = context.plan.steps[context.currentStep] ?? "Nächster logischer Schritt";
+  const stepDesc = context.plan.steps[context.currentStep] ?? "Next logical step";
   const existing = context.currentScene.primitives.map((p) => ({
-    id: p.id, position: p.position, size: p.size, tags: p.tags,
+    id: p.id, position: p.position, size: p.size,
   }));
 
-  return `Du bist ein 3D-Builder. Erzeuge genau ein Cube-Primitive als nächsten Bauschritt.
+  return `You are a 3D builder. You produce exactly ONE cube primitive per step.
 
-Ziel: ${context.plan.goal}
-Aktueller Schritt (${context.currentStep + 1}/${context.plan.estimatedSteps}): ${stepDesc}
-Vorhandene Primitives: ${JSON.stringify(existing)}
+COORDINATE SYSTEM:
+- x = left/right, y = up (height), z = forward/back
+- y=0 is the ground. position is the CENTER of the cube.
+- A cube at position [0, 0.5, 0] with size [1, 1, 1] sits on the ground.
+- Cubes must NOT overlap existing primitives.
 
-Regeln:
-- position: [x, y, z] – y ist nach oben
-- size: [breite, höhe, tiefe]
-- rotation: [rx, ry, rz] in Grad
-- id: kurzer, beschreibender Name (keine Leerzeichen)
-- tags: relevante Labels
-- color: Hex-Farbe passend zum Objekt
+CURRENT STATE:
+- Goal: ${context.plan.goal}
+- Step ${context.currentStep + 1} of ${context.plan.estimatedSteps}: "${stepDesc}"
+- Existing primitives: ${existing.length === 0 ? "none" : JSON.stringify(existing)}
 
-Antworte NUR mit validem JSON (kein Markdown, kein Codeblock):
-{"stepNumber": N, "action": "add", "reasoning": "...", "primitive": {"id": "...", "type": "cube", "position": [x,y,z], "size": [w,h,d], "rotation": [0,0,0], "color": "#hex", "tags": ["..."]}}`;
+RULES:
+- id: short kebab-case name (e.g. "tabletop", "leg-fl")
+- position: [x, y, z] as numbers — y is the center height
+- size: [width, height, depth] as numbers
+- rotation: always [0, 0, 0] for now
+- color: hex color string
+- tags: array of descriptive labels
+- Make sizes realistic relative to each other
+
+Respond with ONLY valid JSON, no markdown, no code blocks:
+{"stepNumber": ${context.currentStep + 1}, "action": "add", "reasoning": "why this cube", "primitive": {"id": "name", "type": "cube", "position": [x, y, z], "size": [w, h, d], "rotation": [0, 0, 0], "color": "#8B4513", "tags": ["label"]}}
+
+EXAMPLE — a tabletop:
+{"stepNumber": 1, "action": "add", "reasoning": "Flat tabletop surface", "primitive": {"id": "tabletop", "type": "cube", "position": [0, 5, 0], "size": [6, 0.4, 3], "rotation": [0, 0, 0], "color": "#8B4513", "tags": ["tabletop", "surface"]}}
+
+EXAMPLE — a table leg:
+{"stepNumber": 2, "action": "add", "reasoning": "Front-left leg supporting the tabletop", "primitive": {"id": "leg-fl", "type": "cube", "position": [-2.5, 2.4, -1], "size": [0.4, 4.8, 0.4], "rotation": [0, 0, 0], "color": "#6B3410", "tags": ["leg", "front-left"]}}`;
 }
 
 export function buildCriticSystemPrompt(scene: Scene, plan: GenerationPlan, stepNumber: number): string {
@@ -50,14 +77,14 @@ export function buildCriticSystemPrompt(scene: Scene, plan: GenerationPlan, step
     id: p.id, position: p.position, size: p.size, tags: p.tags,
   }));
 
-  return `Du bist ein 3D-Kritiker. Bewerte den aktuellen Zustand der Szene.
+  return `You are a 3D build critic. Evaluate the current scene state.
 
-Ziel: ${plan.goal}
-Schritt ${stepNumber} von ${plan.estimatedSteps}
+Goal: ${plan.goal}
+Step ${stepNumber} of ${plan.estimatedSteps} completed.
 Primitives: ${JSON.stringify(primitives)}
 
-Bewerte: Passt das bisherige Ergebnis zum Ziel? Ist der nächste Schritt sinnvoll?
+Set isComplete to true ONLY when all planned steps are done (step ${plan.estimatedSteps} of ${plan.estimatedSteps}).
 
-Antworte NUR mit validem JSON (kein Markdown, kein Codeblock):
-{"approved": true/false, "feedback": "...", "isComplete": true/false}`;
+Respond with ONLY valid JSON, no markdown, no code blocks:
+{"approved": true, "feedback": "short feedback", "isComplete": ${stepNumber >= plan.estimatedSteps}}`;
 }
