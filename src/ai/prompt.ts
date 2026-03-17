@@ -1,4 +1,5 @@
 import type { PromptContext, Scene, GenerationPlan } from "../core/types.js";
+import { getBBox } from "../core/constraints.js";
 
 export function buildPromptContext(
   userPrompt: string,
@@ -7,6 +8,25 @@ export function buildPromptContext(
   currentStep: number,
 ): PromptContext {
   return { userPrompt, currentScene: scene, plan, currentStep };
+}
+
+// Erzeugt eine lesbare Liste aller Cubes mit ihren exakten Kanten
+function formatExistingPrimitives(scene: Scene): string {
+  if (scene.primitives.length === 0) return "none";
+
+  return JSON.stringify(scene.primitives.map((p) => {
+    const bb = getBBox(p);
+    return {
+      id: p.id,
+      position: p.position,
+      size: p.size,
+      edges: {
+        x: [+bb.min[0].toFixed(2), +bb.max[0].toFixed(2)],
+        y: [+bb.min[1].toFixed(2), +bb.max[1].toFixed(2)],
+        z: [+bb.min[2].toFixed(2), +bb.max[2].toFixed(2)],
+      },
+    };
+  }));
 }
 
 export function buildPlannerSystemPrompt(userPrompt: string, scene: Scene): string {
@@ -31,11 +51,18 @@ Respond with ONLY valid JSON, no markdown, no code blocks:
 {"goal": "short goal description", "estimatedSteps": N, "steps": ["step 1", "step 2", ...]}`;
 }
 
-export function buildBuilderSystemPrompt(context: PromptContext): string {
+export function buildBuilderSystemPrompt(context: PromptContext, correctionContext?: string): string {
   const stepDesc = context.plan.steps[context.currentStep] ?? "Next logical step";
-  const existing = context.currentScene.primitives.map((p) => ({
-    id: p.id, position: p.position, size: p.size,
-  }));
+  const existingStr = formatExistingPrimitives(context.currentScene);
+
+  let correction = "";
+  if (correctionContext) {
+    correction = `
+CORRECTION REQUIRED — YOUR PREVIOUS ATTEMPT FAILED:
+${correctionContext}
+You MUST fix the placement. Adjust position and/or size so there is NO overlap.
+`;
+  }
 
   return `You are a 3D builder. You produce exactly ONE cube primitive per step.
 
@@ -44,28 +71,29 @@ COORDINATE SYSTEM:
 - y=0 is the ground. position = CENTER of the cube.
 - Bottom of a cube = position.y - size.y/2
 - Top of a cube = position.y + size.y/2
-- A cube with size [1, 1, 1] at position [0, 0.5, 0] sits on the ground (bottom at y=0, top at y=1).
 
-SPATIAL PLACEMENT — CRITICAL:
-- Parts that sit ON TOP of another part: their bottom edge must equal the top edge of the part below.
-  Example: if a surface has top at y=5, a part on top starts at y=5, so its center.y = 5 + own_height/2.
-- Parts that support something FROM BELOW: their top edge must equal the bottom edge of the part above.
-  Example: if a surface has bottom at y=4.8, a support below has its top at y=4.8, so center.y = 4.8 - own_height/2.
-- Parts placed NEXT TO each other: their edges touch but do not penetrate.
-- Cubes may touch at edges/faces. That is normal and expected. Only deep penetration is wrong.
+NO-OVERLAP RULE — CRITICAL:
+Each existing primitive below has "edges" showing its exact occupied range on each axis.
+Your new cube's edges must NOT overlap with ANY existing cube's edges on ALL THREE axes simultaneously.
+Two cubes overlap when: new.x_min < existing.x_max AND new.x_max > existing.x_min AND same for y AND same for z.
+Cubes MAY touch (share an edge). They must NOT penetrate.
+
+To place a part BELOW an existing cube: new cube's top (position.y + size.y/2) should equal existing cube's bottom edge (edges.y[0]).
+To place a part NEXT TO: ensure at least one axis has no range overlap.
 
 CURRENT STATE:
 - Goal: ${context.plan.goal}
 - Step ${context.currentStep + 1} of ${context.plan.estimatedSteps}: "${stepDesc}"
-- Existing primitives: ${existing.length === 0 ? "none" : JSON.stringify(existing)}
-
+- Existing primitives with edge coordinates: ${existingStr}
+${correction}
 OUTPUT RULES:
-- id: short kebab-case name (e.g. "seat", "leg-fl", "back-panel")
+- id: short kebab-case name
 - position: [x, y, z] as numbers
 - size: [width, height, depth] as numbers (all > 0)
 - rotation: [0, 0, 0]
 - color: hex color fitting the object
 - tags: descriptive labels
+- VERIFY before responding: calculate your cube's edges and check they don't penetrate existing cubes.
 
 Respond with ONLY valid JSON, no markdown, no code blocks:
 {"stepNumber": ${context.currentStep + 1}, "action": "add", "reasoning": "why this cube", "primitive": {"id": "name", "type": "cube", "position": [x, y, z], "size": [w, h, d], "rotation": [0, 0, 0], "color": "#hex", "tags": ["label"]}}`;
