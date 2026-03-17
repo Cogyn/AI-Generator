@@ -1,4 +1,5 @@
 import type { PromptContext, Scene, GenerationPlan } from "../core/types.js";
+import { getPrimitiveExtents } from "../core/types.js";
 import { getBBox } from "../core/constraints.js";
 
 export function buildPromptContext(
@@ -16,10 +17,12 @@ function formatExistingPrimitives(scene: Scene): string {
 
   return JSON.stringify(scene.primitives.map((p) => {
     const bb = getBBox(p);
+    const ext = getPrimitiveExtents(p);
     return {
       id: p.id,
+      type: p.type,
       position: p.position,
-      size: p.size,
+      extents: ext,
       edges: {
         x: [+bb.min[0].toFixed(2), +bb.max[0].toFixed(2)],
         y: [+bb.min[1].toFixed(2), +bb.max[1].toFixed(2)],
@@ -101,7 +104,7 @@ Respond with ONLY valid JSON, no markdown, no code blocks:
 
 export function buildCriticSystemPrompt(scene: Scene, plan: GenerationPlan, stepNumber: number): string {
   const primitives = scene.primitives.map((p) => ({
-    id: p.id, position: p.position, size: p.size, tags: p.tags,
+    id: p.id, type: p.type, position: p.position, extents: getPrimitiveExtents(p), tags: p.tags,
   }));
 
   return `You are a 3D build critic. Evaluate the current scene state.

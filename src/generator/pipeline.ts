@@ -1,4 +1,5 @@
 import type { Scene, PipelineConfig, GenerationPlan, Primitive } from "../core/types.js";
+import { getPrimitiveExtents } from "../core/types.js";
 import { createScene, addPrimitive, saveScene } from "../core/scene.js";
 import { validateAll, defaultConstraints, findOverlaps, getBBox } from "../core/constraints.js";
 import { buildPromptContext } from "../ai/prompt.js";
@@ -117,7 +118,7 @@ function buildCorrectionContext(primitive: Primitive, scene: Scene): string {
   const newBox = getBBox(primitive);
 
   const lines: string[] = [
-    `Your cube "${primitive.id}" at position [${primitive.position}] with size [${primitive.size}] OVERLAPS with existing cubes:`,
+    `Your primitive "${primitive.id}" at position [${primitive.position}] with extents [${getPrimitiveExtents(primitive)}] OVERLAPS with existing primitives:`,
     `Your cube's edges: x=[${newBox.min[0].toFixed(2)}, ${newBox.max[0].toFixed(2)}], y=[${newBox.min[1].toFixed(2)}, ${newBox.max[1].toFixed(2)}], z=[${newBox.min[2].toFixed(2)}, ${newBox.max[2].toFixed(2)}]`,
   ];
 

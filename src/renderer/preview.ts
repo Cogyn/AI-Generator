@@ -121,8 +121,19 @@ export function syncScene(scene: Scene): void {
   }
 }
 
+function createGeometry(p: Primitive): THREE.BufferGeometry {
+  switch (p.type) {
+    case "cube":
+      return new THREE.BoxGeometry(p.size[0], p.size[1], p.size[2]);
+    case "sphere":
+      return new THREE.SphereGeometry(p.radius, 24, 16);
+    case "cylinder":
+      return new THREE.CylinderGeometry(p.radiusTop, p.radiusBottom, p.height, 24);
+  }
+}
+
 function createMesh(p: Primitive): THREE.Mesh {
-  const geo = new THREE.BoxGeometry(p.size[0], p.size[1], p.size[2]);
+  const geo = createGeometry(p);
   const mat = new THREE.MeshStandardMaterial({
     color: new THREE.Color(p.color),
     roughness: 0.7,

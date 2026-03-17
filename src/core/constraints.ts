@@ -1,6 +1,6 @@
 import type { Constraint, Scene, Primitive, Vec3 } from "./types.js";
+import { getPrimitiveExtents } from "./types.js";
 
-// Toleranz: Cubes dürfen sich an Kanten/Flächen berühren oder minimal eindringen.
 const OVERLAP_TOLERANCE = 0.1;
 
 export interface BBox {
@@ -8,22 +8,26 @@ export interface BBox {
   max: Vec3;
 }
 
-export function getBBox(p: { position: Vec3; size: Vec3 }): BBox {
+// Generisch für alle Primitive-Typen (AABB-basiert)
+export function getBBox(p: { position: Vec3 } & ({ size: Vec3 } | Primitive)): BBox {
+  const ext = "type" in p
+    ? getPrimitiveExtents(p as Primitive)
+    : (p as { size: Vec3 }).size;
+
   return {
     min: [
-      p.position[0] - p.size[0] / 2,
-      p.position[1] - p.size[1] / 2,
-      p.position[2] - p.size[2] / 2,
+      p.position[0] - ext[0] / 2,
+      p.position[1] - ext[1] / 2,
+      p.position[2] - ext[2] / 2,
     ],
     max: [
-      p.position[0] + p.size[0] / 2,
-      p.position[1] + p.size[1] / 2,
-      p.position[2] + p.size[2] / 2,
+      p.position[0] + ext[0] / 2,
+      p.position[1] + ext[1] / 2,
+      p.position[2] + ext[2] / 2,
     ],
   };
 }
 
-// Berechnet wie tief zwei Boxes auf jeder Achse eindringen (negativ = kein Overlap)
 function overlapDepth(a: BBox, b: BBox): Vec3 {
   return [
     Math.min(a.max[0], b.max[0]) - Math.max(a.min[0], b.min[0]),
@@ -36,10 +40,9 @@ export interface OverlapInfo {
   existingId: string;
   existingBBox: BBox;
   newBBox: BBox;
-  depth: Vec3; // Eindringtiefe pro Achse
+  depth: Vec3;
 }
 
-// Prüft Overlap und gibt Details zurück
 export function findOverlaps(scene: Scene, newPrimitive: Primitive): OverlapInfo[] {
   const newBox = getBBox(newPrimitive);
   const overlaps: OverlapInfo[] = [];
@@ -48,7 +51,6 @@ export function findOverlaps(scene: Scene, newPrimitive: Primitive): OverlapInfo
     const exBox = getBBox(existing);
     const depth = overlapDepth(exBox, newBox);
 
-    // Overlap nur wenn auf ALLEN Achsen > Toleranz
     if (depth[0] > OVERLAP_TOLERANCE && depth[1] > OVERLAP_TOLERANCE && depth[2] > OVERLAP_TOLERANCE) {
       overlaps.push({
         existingId: existing.id,
@@ -82,8 +84,9 @@ export const withinBounds: Constraint = {
   name: "within-bounds",
   check(_scene: Scene, p: Primitive) {
     const limit = 100;
+    const ext = getPrimitiveExtents(p);
     for (let i = 0; i < 3; i++) {
-      if (Math.abs(p.position[i]) + p.size[i] / 2 > limit) {
+      if (Math.abs(p.position[i]) + ext[i] / 2 > limit) {
         return { valid: false, message: `"${p.id}" exceeds scene bounds (±${limit})` };
       }
     }
