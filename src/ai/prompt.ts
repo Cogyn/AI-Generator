@@ -44,7 +44,7 @@ PLANNING RULES:
 - Order steps logically: large structural parts first, details last.
 - Step descriptions should be short and clear.
 
-Current scene: ${n} primitives.
+Current scene: ${n} primitives.${n > 0 ? `\nExisting primitives (DO NOT recreate these — build ON TOP of what exists):\n${formatExistingPrimitives(scene)}` : ""}
 User request: "${userPrompt}"
 
 Respond with ONLY valid JSON, no markdown, no code blocks:

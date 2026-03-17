@@ -176,17 +176,16 @@ button.secondary:hover:not(:disabled) {
   background: var(--border);
 }
 
-button.danger {
+button.danger-outline {
   background: none;
   color: var(--danger);
-  border-color: transparent;
-  font-size: 0.75rem;
-  padding: 0.3rem 0;
-  margin-top: 0.4rem;
+  border-color: var(--danger);
+  opacity: 0.6;
 }
 
-button.danger:hover {
-  color: #ff6b6b;
+button.danger-outline:hover:not(:disabled) {
+  opacity: 1;
+  background: rgba(231, 76, 60, 0.1);
 }
 
 button:disabled {

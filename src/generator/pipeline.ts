@@ -69,6 +69,48 @@ export async function startPipeline(
   return state;
 }
 
+// Erweitert eine bestehende Scene mit einem neuen Prompt
+export async function extendPipeline(
+  userPrompt: string,
+  existingScene: Scene,
+  config: Partial<PipelineConfig> = {},
+  log: LogFn = console.log,
+  onStep?: OnStepFn,
+): Promise<PipelineState> {
+  const cfg = { ...defaultConfig, ...config };
+
+  log(`Erweitere bestehende Scene (${existingScene.primitives.length} Primitives)...`, "info");
+
+  log("Erstelle Erweiterungsplan...", "info");
+  const emptyPlan: GenerationPlan = { goal: "", estimatedSteps: 0, steps: [] };
+  const context = buildPromptContext(userPrompt, existingScene, emptyPlan, 0);
+  const { plan } = await planner(context);
+  log(`Plan: ${plan.estimatedSteps} neue Schritte – ${plan.goal}`, "success");
+
+  state = {
+    scene: existingScene,
+    plan,
+    currentStep: 0,
+    isComplete: false,
+    isRunning: false,
+  };
+
+  if (cfg.autoRun) {
+    state.isRunning = true;
+    const totalSteps = Math.min(plan.estimatedSteps, cfg.maxSteps);
+
+    for (let step = 0; step < totalSteps; step++) {
+      state = await executeStep(state, log);
+      onStep?.(state.scene, state.currentStep);
+      if (state.isComplete) break;
+    }
+    state.isRunning = false;
+  }
+
+  saveScene(state.scene);
+  return state;
+}
+
 // Baut eine detaillierte Fehlerbeschreibung für den Retry
 function buildCorrectionContext(primitive: Primitive, scene: Scene): string {
   const overlaps = findOverlaps(scene, primitive);

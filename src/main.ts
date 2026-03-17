@@ -1,5 +1,5 @@
 import { initRenderer, syncScene, clearRenderer } from "./renderer/preview.js";
-import { startPipeline, nextStep, getPipelineState, type PipelineState } from "./generator/pipeline.js";
+import { startPipeline, extendPipeline, nextStep, getPipelineState, type PipelineState } from "./generator/pipeline.js";
 import { loadScene, clearScene } from "./core/scene.js";
 import { getSettings, saveSettings, hasApiKey } from "./ai/client.js";
 import type { Scene } from "./core/types.js";
@@ -8,6 +8,7 @@ import type { Scene } from "./core/types.js";
 const canvas = document.getElementById("scene-canvas") as HTMLCanvasElement;
 const promptInput = document.getElementById("prompt-input") as HTMLTextAreaElement;
 const generateBtn = document.getElementById("generate-btn") as HTMLButtonElement;
+const extendBtn = document.getElementById("extend-btn") as HTMLButtonElement;
 const stepBtn = document.getElementById("step-btn") as HTMLButtonElement;
 const resetBtn = document.getElementById("reset-btn") as HTMLButtonElement;
 const settingsBtn = document.getElementById("settings-btn") as HTMLButtonElement;
@@ -22,14 +23,19 @@ const logEl = document.getElementById("log") as HTMLDivElement;
 const primitiveCountEl = document.getElementById("primitive-count") as HTMLSpanElement;
 const stepCountEl = document.getElementById("step-count") as HTMLSpanElement;
 
+// Track current scene for extend functionality
+let currentScene: Scene | null = null;
+
 // Init
 initRenderer(canvas);
 
 // Restore scene from localStorage
 const savedScene = loadScene();
 if (savedScene) {
+  currentScene = savedScene;
   syncScene(savedScene);
   updateInfo(savedScene);
+  updateExtendButton();
 }
 
 // Restore API key
@@ -56,45 +62,48 @@ saveSettingsBtn.addEventListener("click", () => {
   log(`Einstellungen gespeichert (${modelSelect.value})`, "success");
 });
 
-// Close modal on backdrop click
 settingsModal.addEventListener("click", (e) => {
   if (e.target === settingsModal) settingsModal.classList.add("hidden");
 });
 
-// --- Generate ---
+// --- Neu generieren (ersetzt alles) ---
 generateBtn.addEventListener("click", async () => {
   const prompt = promptInput.value.trim();
   if (!prompt) return;
+  if (!checkApiKey()) return;
 
-  if (!hasApiKey()) {
-    settingsModal.classList.remove("hidden");
-    log("Bitte zuerst API Key eingeben", "warn");
-    return;
-  }
-
-  setGenerating(true);
+  setGenerating(true, "generate");
   clearRenderer();
   clearScene();
+  currentScene = null;
   logEl.innerHTML = "";
 
   try {
-    await startPipeline(
-      prompt,
-      { maxSteps: 10, autoRun: true },
-      log,
-      onStep,
-    );
-
-    const state = getPipelineState();
-    if (state) {
-      updatePlan(state);
-      updateInfo(state.scene);
-      stepBtn.disabled = state.isComplete;
-    }
+    await startPipeline(prompt, { maxSteps: 10, autoRun: true }, log, onStep);
+    finishPipeline();
   } catch (err) {
     log(`Fehler: ${(err as Error).message}`, "error");
   } finally {
-    setGenerating(false);
+    setGenerating(false, "generate");
+  }
+});
+
+// --- Erweitern (baut auf bestehender Scene auf) ---
+extendBtn.addEventListener("click", async () => {
+  const prompt = promptInput.value.trim();
+  if (!prompt || !currentScene) return;
+  if (!checkApiKey()) return;
+
+  setGenerating(true, "extend");
+  logEl.innerHTML = "";
+
+  try {
+    await extendPipeline(prompt, currentScene, { maxSteps: 10, autoRun: true }, log, onStep);
+    finishPipeline();
+  } catch (err) {
+    log(`Fehler: ${(err as Error).message}`, "error");
+  } finally {
+    setGenerating(false, "extend");
   }
 });
 
@@ -106,9 +115,11 @@ stepBtn.addEventListener("click", async () => {
   try {
     const state = await nextStep(log, onStep);
     if (state) {
+      currentScene = state.scene;
       updatePlan(state);
       updateInfo(state.scene);
       stepBtn.disabled = state.isComplete;
+      updateExtendButton();
     }
   } catch (err) {
     log(`Fehler: ${(err as Error).message}`, "error");
@@ -119,18 +130,42 @@ stepBtn.addEventListener("click", async () => {
 resetBtn.addEventListener("click", () => {
   clearRenderer();
   clearScene();
+  currentScene = null;
   planSection.classList.add("hidden");
   logEl.innerHTML = "";
   stepBtn.disabled = true;
   updateInfo(null);
+  updateExtendButton();
   log("Scene zurückgesetzt", "info");
 });
 
 // --- Helpers ---
 
+function checkApiKey(): boolean {
+  if (!hasApiKey()) {
+    settingsModal.classList.remove("hidden");
+    log("Bitte zuerst API Key eingeben", "warn");
+    return false;
+  }
+  return true;
+}
+
+function finishPipeline(): void {
+  const state = getPipelineState();
+  if (state) {
+    currentScene = state.scene;
+    updatePlan(state);
+    updateInfo(state.scene);
+    stepBtn.disabled = state.isComplete;
+    updateExtendButton();
+  }
+}
+
 function onStep(scene: Scene, _stepNum: number): void {
+  currentScene = scene;
   syncScene(scene);
   updateInfo(scene);
+  updateExtendButton();
 }
 
 function updateInfo(scene: Scene | null): void {
@@ -138,6 +173,10 @@ function updateInfo(scene: Scene | null): void {
   const steps = scene?.metadata.stepCount ?? 0;
   primitiveCountEl.textContent = `${count} Primitive${count !== 1 ? "s" : ""}`;
   stepCountEl.textContent = `Schritt ${steps}`;
+}
+
+function updateExtendButton(): void {
+  extendBtn.disabled = !currentScene || currentScene.primitives.length === 0;
 }
 
 function updatePlan(state: PipelineState): void {
@@ -160,9 +199,16 @@ function log(msg: string, level: "info" | "success" | "warn" | "error" = "info")
   logEl.scrollTop = logEl.scrollHeight;
 }
 
-function setGenerating(active: boolean): void {
+function setGenerating(active: boolean, mode: "generate" | "extend"): void {
   generateBtn.disabled = active;
-  generateBtn.textContent = active ? "Generiert..." : "Generieren";
-  if (active) generateBtn.classList.add("generating");
-  else generateBtn.classList.remove("generating");
+  extendBtn.disabled = active;
+  if (mode === "generate") {
+    generateBtn.textContent = active ? "Generiert..." : "Neu generieren";
+    if (active) generateBtn.classList.add("generating");
+    else generateBtn.classList.remove("generating");
+  } else {
+    extendBtn.textContent = active ? "Erweitert..." : "Erweitern";
+    if (active) extendBtn.classList.add("generating");
+    else extendBtn.classList.remove("generating");
+  }
 }
