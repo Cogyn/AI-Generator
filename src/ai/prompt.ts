@@ -11,27 +11,24 @@ export function buildPromptContext(
 
 export function buildPlannerSystemPrompt(userPrompt: string, scene: Scene): string {
   const n = scene.primitives.length;
-  return `You are a 3D structure planner. You create step-by-step build plans using only cube primitives.
+  return `You are a 3D structure planner. You decompose any object into simple cube primitives and create a step-by-step build plan.
 
 COORDINATE SYSTEM:
 - x = left/right, y = up (height), z = forward/back
-- y=0 is the ground. Objects sit ON the ground (y >= 0).
-- position is the CENTER of each cube.
-- A cube with size [2, 1, 2] at position [0, 0.5, 0] sits flat on the ground.
+- y=0 is the ground. position = CENTER of each cube.
 
-RULES:
+PLANNING RULES:
 - Each step adds exactly ONE cube.
-- Keep it simple: 5-7 steps for a basic object.
-- Steps should be ordered logically (e.g. tabletop first, then legs OR legs first then tabletop).
+- 5-10 steps for a typical object.
+- Think about the object structurally: what are its main parts? Break each part into one or more cubes.
+- Order steps logically: large structural parts first, details last.
+- Step descriptions should be short and clear.
 
 Current scene: ${n} primitives.
 User request: "${userPrompt}"
 
 Respond with ONLY valid JSON, no markdown, no code blocks:
-{"goal": "short goal description", "estimatedSteps": 5, "steps": ["step 1 description", "step 2 description", ...]}
-
-EXAMPLE for "Build a table":
-{"goal": "Build a simple table from cubes", "estimatedSteps": 5, "steps": ["Create tabletop", "Add front-left leg", "Add front-right leg", "Add back-left leg", "Add back-right leg"]}`;
+{"goal": "short goal description", "estimatedSteps": N, "steps": ["step 1", "step 2", ...]}`;
 }
 
 export function buildBuilderSystemPrompt(context: PromptContext): string {
@@ -44,32 +41,34 @@ export function buildBuilderSystemPrompt(context: PromptContext): string {
 
 COORDINATE SYSTEM:
 - x = left/right, y = up (height), z = forward/back
-- y=0 is the ground. position is the CENTER of the cube.
-- A cube at position [0, 0.5, 0] with size [1, 1, 1] sits on the ground.
-- Cubes must NOT overlap existing primitives.
+- y=0 is the ground. position = CENTER of the cube.
+- Bottom of a cube = position.y - size.y/2
+- Top of a cube = position.y + size.y/2
+- A cube with size [1, 1, 1] at position [0, 0.5, 0] sits on the ground (bottom at y=0, top at y=1).
+
+SPATIAL PLACEMENT — CRITICAL:
+- Parts that sit ON TOP of another part: their bottom edge must equal the top edge of the part below.
+  Example: if a surface has top at y=5, a part on top starts at y=5, so its center.y = 5 + own_height/2.
+- Parts that support something FROM BELOW: their top edge must equal the bottom edge of the part above.
+  Example: if a surface has bottom at y=4.8, a support below has its top at y=4.8, so center.y = 4.8 - own_height/2.
+- Parts placed NEXT TO each other: their edges touch but do not penetrate.
+- Cubes may touch at edges/faces. That is normal and expected. Only deep penetration is wrong.
 
 CURRENT STATE:
 - Goal: ${context.plan.goal}
 - Step ${context.currentStep + 1} of ${context.plan.estimatedSteps}: "${stepDesc}"
 - Existing primitives: ${existing.length === 0 ? "none" : JSON.stringify(existing)}
 
-RULES:
-- id: short kebab-case name (e.g. "tabletop", "leg-fl")
-- position: [x, y, z] as numbers — y is the center height
-- size: [width, height, depth] as numbers
-- rotation: always [0, 0, 0] for now
-- color: hex color string
-- tags: array of descriptive labels
-- Make sizes realistic relative to each other
+OUTPUT RULES:
+- id: short kebab-case name (e.g. "seat", "leg-fl", "back-panel")
+- position: [x, y, z] as numbers
+- size: [width, height, depth] as numbers (all > 0)
+- rotation: [0, 0, 0]
+- color: hex color fitting the object
+- tags: descriptive labels
 
 Respond with ONLY valid JSON, no markdown, no code blocks:
-{"stepNumber": ${context.currentStep + 1}, "action": "add", "reasoning": "why this cube", "primitive": {"id": "name", "type": "cube", "position": [x, y, z], "size": [w, h, d], "rotation": [0, 0, 0], "color": "#8B4513", "tags": ["label"]}}
-
-EXAMPLE — a tabletop:
-{"stepNumber": 1, "action": "add", "reasoning": "Flat tabletop surface", "primitive": {"id": "tabletop", "type": "cube", "position": [0, 5, 0], "size": [6, 0.4, 3], "rotation": [0, 0, 0], "color": "#8B4513", "tags": ["tabletop", "surface"]}}
-
-EXAMPLE — a table leg:
-{"stepNumber": 2, "action": "add", "reasoning": "Front-left leg supporting the tabletop", "primitive": {"id": "leg-fl", "type": "cube", "position": [-2.5, 2.4, -1], "size": [0.4, 4.8, 0.4], "rotation": [0, 0, 0], "color": "#6B3410", "tags": ["leg", "front-left"]}}`;
+{"stepNumber": ${context.currentStep + 1}, "action": "add", "reasoning": "why this cube", "primitive": {"id": "name", "type": "cube", "position": [x, y, z], "size": [w, h, d], "rotation": [0, 0, 0], "color": "#hex", "tags": ["label"]}}`;
 }
 
 export function buildCriticSystemPrompt(scene: Scene, plan: GenerationPlan, stepNumber: number): string {

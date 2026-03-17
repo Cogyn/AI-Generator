@@ -1,12 +1,17 @@
 import type { Constraint, Scene, Primitive, Vec3 } from "./types.js";
 
+// Toleranz: Cubes dürfen sich an Kanten/Flächen berühren oder minimal eindringen.
+// Ohne das werden aneinander anschließende Bauteile fälschlich als Überschneidung erkannt.
+const OVERLAP_TOLERANCE = 0.1;
+
 function boxesOverlap(posA: Vec3, sizeA: Vec3, posB: Vec3, sizeB: Vec3): boolean {
   for (let i = 0; i < 3; i++) {
     const minA = posA[i] - sizeA[i] / 2;
     const maxA = posA[i] + sizeA[i] / 2;
     const minB = posB[i] - sizeB[i] / 2;
     const maxB = posB[i] + sizeB[i] / 2;
-    if (maxA <= minB || maxB <= minA) return false;
+    // Kein Overlap wenn Abstand >= Toleranz auf irgendeiner Achse
+    if (maxA <= minB + OVERLAP_TOLERANCE || maxB <= minA + OVERLAP_TOLERANCE) return false;
   }
   return true;
 }
