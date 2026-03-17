@@ -1,0 +1,6 @@
+node_modules/
+dist/
+*.local
+scene.json
+examples/*.json
+.DS_Store

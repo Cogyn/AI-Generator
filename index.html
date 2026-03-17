@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Structure Generator</title>
+  <link rel="stylesheet" href="/src/web/style.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- Header -->
+    <header id="header">
+      <h1>AI Structure Generator</h1>
+      <button id="settings-btn" title="Einstellungen">⚙</button>
+    </header>
+
+    <!-- Settings Modal -->
+    <div id="settings-modal" class="modal hidden">
+      <div class="modal-content">
+        <h2>Einstellungen</h2>
+        <label>
+          OpenAI API Key
+          <input type="password" id="api-key-input" placeholder="sk-..." />
+        </label>
+        <label>
+          Modell
+          <select id="model-select">
+            <option value="gpt-4o-mini">GPT-4o Mini (schnell & günstig)</option>
+            <option value="gpt-4o">GPT-4o</option>
+            <option value="gpt-4.1">GPT-4.1</option>
+            <option value="gpt-4.1-mini">GPT-4.1 Mini</option>
+          </select>
+        </label>
+        <div class="modal-actions">
+          <button id="save-settings">Speichern</button>
+          <button id="close-settings" class="secondary">Schließen</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Main Layout -->
+    <div id="main">
+      <!-- 3D Viewport -->
+      <div id="viewport">
+        <canvas id="scene-canvas"></canvas>
+        <div id="scene-info">
+          <span id="primitive-count">0 Primitives</span>
+          <span id="step-count">Schritt 0</span>
+        </div>
+      </div>
+
+      <!-- Sidebar -->
+      <aside id="sidebar">
+        <!-- Prompt Input -->
+        <section id="prompt-section">
+          <h3>Prompt</h3>
+          <textarea id="prompt-input" rows="3" placeholder="Beschreibe ein Objekt, z.B. 'Erzeuge einen Tisch aus Cubes'"></textarea>
+          <div class="button-row">
+            <button id="generate-btn" class="primary">Generieren</button>
+            <button id="step-btn" class="secondary" disabled>Nächster Schritt</button>
+          </div>
+          <button id="reset-btn" class="danger">Reset</button>
+        </section>
+
+        <!-- Plan -->
+        <section id="plan-section" class="hidden">
+          <h3>Plan</h3>
+          <div id="plan-display"></div>
+        </section>
+
+        <!-- Log -->
+        <section id="log-section">
+          <h3>Log</h3>
+          <div id="log"></div>
+        </section>
+      </aside>
+    </div>
+  </div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
