@@ -140,6 +140,68 @@ body {
   border-color: var(--accent);
 }
 
+/* Toggle Switch */
+.toggle-row {
+  margin-top: 0.6rem;
+}
+
+.toggle-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+
+.toggle-text {
+  user-select: none;
+}
+
+.toggle-switch {
+  position: relative;
+  width: 36px;
+  height: 20px;
+}
+
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  position: absolute;
+}
+
+.toggle-slider {
+  position: absolute;
+  inset: 0;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  transition: all 0.2s;
+}
+
+.toggle-slider::before {
+  content: "";
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  left: 2px;
+  top: 2px;
+  background: var(--text-dim);
+  border-radius: 50%;
+  transition: all 0.2s;
+}
+
+.toggle-switch input:checked + .toggle-slider {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.toggle-switch input:checked + .toggle-slider::before {
+  transform: translateX(16px);
+  background: white;
+}
+
 .button-row {
   display: flex;
   gap: 0.5rem;
@@ -222,6 +284,35 @@ button:disabled {
   color: var(--accent);
   font-weight: 600;
 }
+
+/* Parallel Plan Display */
+.plan-region {
+  padding: 0.3rem 0;
+  font-size: 0.8rem;
+}
+
+.plan-region-label {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.plan-region-goal {
+  color: var(--text-dim);
+  margin-left: 0.5rem;
+}
+
+.plan-quality {
+  margin-top: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  background: var(--surface-2);
+  border-radius: 6px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.plan-quality.good { color: var(--success); }
+.plan-quality.ok { color: var(--warning); }
+.plan-quality.bad { color: var(--danger); }
 
 /* Log */
 #log {

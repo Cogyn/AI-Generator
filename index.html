@@ -57,13 +57,23 @@
         <!-- Prompt Input -->
         <section id="prompt-section">
           <h3>Prompt</h3>
-          <textarea id="prompt-input" rows="3" placeholder="Beschreibe ein Objekt, z.B. 'Erzeuge einen Tisch aus Cubes'"></textarea>
+          <textarea id="prompt-input" rows="3" placeholder="Beschreibe ein Objekt, z.B. 'Erzeuge einen Tisch'"></textarea>
+          <div class="toggle-row">
+            <label class="toggle-label" for="parallel-toggle">
+              <span class="toggle-text">Parallel Pipeline</span>
+              <div class="toggle-switch">
+                <input type="checkbox" id="parallel-toggle" />
+                <span class="toggle-slider"></span>
+              </div>
+            </label>
+          </div>
           <div class="button-row">
             <button id="generate-btn" class="primary">Neu generieren</button>
             <button id="extend-btn" class="secondary" disabled>Erweitern</button>
           </div>
           <div class="button-row">
             <button id="step-btn" class="secondary" disabled>Nächster Schritt</button>
+            <button id="undo-btn" class="secondary" disabled>Undo</button>
             <button id="reset-btn" class="danger-outline">Reset</button>
           </div>
         </section>

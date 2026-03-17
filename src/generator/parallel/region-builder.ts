@@ -1,25 +1,39 @@
-// RegionBuilder: Baut Primitives innerhalb einer zugewiesenen Region
-// Erhält nur lokalen Kontext + Boundary-Info, nicht die ganze Szene
+// RegionBuilder: Baut Primitives in lokalem Koordinatensystem
+// Jeder Builder arbeitet unabhängig um seinen Ursprung herum
 
 import type { BuilderTask, BuilderResult, Primitive } from "../../core/types.js";
 import { callLLM } from "../../ai/client.js";
 
 export async function regionBuilder(task: BuilderTask): Promise<BuilderResult> {
-  const systemPrompt = buildRegionBuilderPrompt(task);
+  const systemPrompt = buildLocalBuilderPrompt(task);
   const raw = await callLLM(systemPrompt, `Build: ${task.localGoal}`);
 
   try {
     const parsed = JSON.parse(raw);
-    const primitives: Primitive[] = (parsed.primitives ?? []).map((p: any) => ({
-      ...p,
-      type: p.type ?? "cube",
-      id: p.id ?? `${task.region.id}-${Math.random().toString(36).slice(2, 6)}`,
-      position: p.position ?? [0, 0, 0],
-      size: p.size ?? [1, 1, 1],
-      rotation: p.rotation ?? [0, 0, 0],
-      color: p.color ?? "#888888",
-      tags: [...(p.tags ?? []), `region:${task.region.id}`],
-    }));
+    const primitives: Primitive[] = (parsed.primitives ?? []).map((p: any) => {
+      const type = (["cube", "sphere", "cylinder"].includes(p.type)) ? p.type : "cube";
+      const base = {
+        id: p.id ?? `${task.region.id}-${Math.random().toString(36).slice(2, 6)}`,
+        type,
+        position: Array.isArray(p.position) && p.position.length >= 3 ? p.position : [0, 0, 0],
+        rotation: Array.isArray(p.rotation) && p.rotation.length >= 3 ? p.rotation : [0, 0, 0],
+        color: p.color ?? "#888888",
+        tags: [...(p.tags ?? []), `part:${task.region.id}`],
+      };
+      switch (type) {
+        case "sphere":
+          return { ...base, radius: typeof p.radius === "number" && p.radius > 0 ? p.radius : (p.size ? p.size[0] / 2 : 1) };
+        case "cylinder":
+          return {
+            ...base,
+            radiusTop: typeof p.radiusTop === "number" && p.radiusTop > 0 ? p.radiusTop : (p.radius ?? (p.size ? p.size[0] / 2 : 0.5)),
+            radiusBottom: typeof p.radiusBottom === "number" && p.radiusBottom > 0 ? p.radiusBottom : (p.radius ?? (p.size ? p.size[0] / 2 : 0.5)),
+            height: typeof p.height === "number" && p.height > 0 ? p.height : (p.size ? p.size[1] : 1),
+          };
+        default:
+          return { ...base, size: Array.isArray(p.size) && p.size.length >= 3 ? p.size : [1, 1, 1] };
+      }
+    }) as Primitive[];
 
     return {
       taskId: task.taskId,
@@ -37,40 +51,42 @@ export async function regionBuilder(task: BuilderTask): Promise<BuilderResult> {
   }
 }
 
-function buildRegionBuilderPrompt(task: BuilderTask): string {
-  const { region, localGoal, styleDirectives, boundaryContext, existingPrimitives } = task;
-  const bounds = region.bounds;
+function buildLocalBuilderPrompt(task: BuilderTask): string {
+  const { region, localGoal, styleDirectives } = task;
 
-  let boundaryInfo = "";
-  if (boundaryContext.length > 0) {
-    boundaryInfo = "\nNEIGHBOR CONTEXT (do NOT place primitives here, but align with these edges):\n";
-    for (const bc of boundaryContext) {
-      if (bc.edgePrimitives.length > 0) {
-        boundaryInfo += `- Edge ${bc.sharedEdge} (region "${bc.regionId}"): ${JSON.stringify(bc.edgePrimitives.map((p) => ({ id: p.id, position: p.position })))}\n`;
-      }
-    }
-  }
+  return `You are a part builder. You build ONE PART of a larger object in LOCAL coordinate space.
+Your part will later be scaled and positioned by a Combiner to form the complete object.
 
-  return `You are a regional 3D builder. You build primitives ONLY within your assigned region.
+YOUR PART: "${region.label}"
+BUILD GOAL: ${localGoal}
 
-YOUR REGION: "${region.label}"
-  Bounds: x=[${bounds.min[0]}, ${bounds.max[0]}], y=[${bounds.min[1]}, ${bounds.max[1]}], z=[${bounds.min[2]}, ${bounds.max[2]}]
-  Allowed types: ${region.allowedTypes.join(", ")}
-  Max primitives: ${region.maxPrimitives}
+COORDINATE SYSTEM:
+- Build centered around origin [0, 0, 0].
+- x = left/right, y = up (height), z = forward/back
+- y=0 is the center height of your part. The Combiner will handle final ground placement.
 
-GLOBAL STYLE: ${styleDirectives.goal}${styleDirectives.colorPalette ? `\nColor palette: ${styleDirectives.colorPalette.join(", ")}` : ""}${styleDirectives.styleTags ? `\nStyle: ${styleDirectives.styleTags.join(", ")}` : ""}
+PRIMITIVE TYPES:
+- cube: {"type": "cube", "size": [width, height, depth]} — rectangular box
+- sphere: {"type": "sphere", "radius": R} — ball
+- cylinder: {"type": "cylinder", "radiusTop": R1, "radiusBottom": R2, "height": H}
+  Cylinders are VERTICAL by default (height along Y). To orient differently:
+  - Horizontal along Z: rotation [90, 0, 0]
+  - Horizontal along X: rotation [0, 0, 90]
+  - Diagonal: use appropriate angles
 
-LOCAL GOAL: ${localGoal}
+ROTATION: [rx, ry, rz] in degrees. Essential for non-upright parts.
 
-EXISTING IN THIS REGION: ${existingPrimitives.length === 0 ? "none" : JSON.stringify(existingPrimitives.map((p) => ({ id: p.id, position: p.position, type: p.type })))}
-${boundaryInfo}
+GLOBAL CONTEXT: Building part of "${styleDirectives.goal}"${styleDirectives.colorPalette ? `\nColor palette: ${styleDirectives.colorPalette.join(", ")}` : ""}${styleDirectives.styleTags ? `\nStyle: ${styleDirectives.styleTags.join(", ")}` : ""}
+
+Max primitives: ${region.maxPrimitives}
+
 RULES:
-- ALL primitives must have their center within your region bounds.
-- Do NOT place anything outside your bounds.
-- Respect the max primitives limit.
-- Only use allowed primitive types.
-- Each primitive needs: id, type, position, size (for cube), rotation, color, tags.
+- Build centered around [0, 0, 0]. The Combiner handles final positioning.
+- Primitives within your part must NOT overlap each other.
+- Every primitive after the first must touch or nearly touch another in your part.
+- Use appropriate colors from the palette.
+- Use rotation for horizontal/diagonal parts (e.g., a fuselage should be a cylinder with rotation [90,0,0]).
 
 Respond with ONLY valid JSON:
-{"reasoning": "what you built and why", "primitives": [{"id": "...", "type": "cube", "position": [x,y,z], "size": [w,h,d], "rotation": [0,0,0], "color": "#hex", "tags": ["..."]}]}`;
+{"reasoning": "what you built and why", "primitives": [{"id": "...", "type": "cube|sphere|cylinder", "position": [x,y,z], ...type-specific fields, "rotation": [rx,ry,rz], "color": "#hex", "tags": ["..."]}]}`;
 }

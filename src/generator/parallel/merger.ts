@@ -10,8 +10,7 @@ import type {
   Vec3,
 } from "../../core/types.js";
 import { addPrimitive } from "../../core/scene.js";
-import { getBBox, type BBox } from "../../core/constraints.js";
-import { getPrimitiveExtents } from "../../core/types.js";
+import { getBBox } from "../../core/constraints.js";
 
 const OVERLAP_TOLERANCE = 0.1;
 
@@ -61,26 +60,30 @@ export function mergeResults(scene: Scene, results: BuilderResult[]): MergeResul
     }
   }
 
-  // Merge: füge alle konfliktfreien Primitives hinzu
+  // Merge: füge alle konfliktfreien Primitives hinzu, sammle verworfene
   const conflictedIds = new Set(conflicts.flatMap((c) => c.affectedPrimitives));
+  const droppedPrimitives: Primitive[] = [];
 
   for (const p of allNew) {
+    const { regionId, ...primitive } = p;
     if (!conflictedIds.has(p.id)) {
-      const { regionId, ...primitive } = p;
       merged = addPrimitive(merged, primitive);
+    } else {
+      droppedPrimitives.push(primitive);
     }
   }
 
   return {
     scene: merged,
     conflicts,
+    droppedPrimitives,
     resolved: conflicts.length === 0,
   };
 }
 
 function primitivesOverlap(a: Primitive, b: Primitive): boolean {
-  const boxA = getPrimitiveBBox(a);
-  const boxB = getPrimitiveBBox(b);
+  const boxA = getBBox(a);
+  const boxB = getBBox(b);
 
   for (let i = 0; i < 3; i++) {
     if (boxA.max[i] <= boxB.min[i] + OVERLAP_TOLERANCE ||
@@ -89,20 +92,4 @@ function primitivesOverlap(a: Primitive, b: Primitive): boolean {
     }
   }
   return true;
-}
-
-function getPrimitiveBBox(p: Primitive): BBox {
-  const ext = getPrimitiveExtents(p);
-  return {
-    min: [
-      p.position[0] - ext[0] / 2,
-      p.position[1] - ext[1] / 2,
-      p.position[2] - ext[2] / 2,
-    ],
-    max: [
-      p.position[0] + ext[0] / 2,
-      p.position[1] + ext[1] / 2,
-      p.position[2] + ext[2] / 2,
-    ],
-  };
 }

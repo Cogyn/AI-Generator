@@ -2,28 +2,58 @@ import type { Constraint, Scene, Primitive, Vec3 } from "./types.js";
 import { getPrimitiveExtents } from "./types.js";
 
 const OVERLAP_TOLERANCE = 0.1;
+const CONNECTIVITY_THRESHOLD = 0.5; // max gap to count as "touching"
 
 export interface BBox {
   min: Vec3;
   max: Vec3;
 }
 
-// Generisch für alle Primitive-Typen (AABB-basiert)
-export function getBBox(p: { position: Vec3 } & ({ size: Vec3 } | Primitive)): BBox {
+// Euler XYZ rotation matrix from degrees
+function eulerToMatrix(rot: Vec3): number[][] {
+  const [rx, ry, rz] = rot.map((d) => (d * Math.PI) / 180);
+  const cx = Math.cos(rx), sx = Math.sin(rx);
+  const cy = Math.cos(ry), sy = Math.sin(ry);
+  const cz = Math.cos(rz), sz = Math.sin(rz);
+  // Three.js Euler order XYZ: M = Rx * Ry * Rz
+  return [
+    [cy * cz,                -cy * sz,                 sy      ],
+    [sx * sy * cz + cx * sz,  -sx * sy * sz + cx * cz, -sx * cy],
+    [-cx * sy * cz + sx * sz, cx * sy * sz + sx * cz,   cx * cy],
+  ];
+}
+
+// AABB half-extents after rotation
+function rotatedHalfExtents(halfExt: Vec3, rot: Vec3): Vec3 {
+  if (rot[0] === 0 && rot[1] === 0 && rot[2] === 0) return halfExt;
+  const m = eulerToMatrix(rot);
+  return [
+    Math.abs(m[0][0]) * halfExt[0] + Math.abs(m[0][1]) * halfExt[1] + Math.abs(m[0][2]) * halfExt[2],
+    Math.abs(m[1][0]) * halfExt[0] + Math.abs(m[1][1]) * halfExt[1] + Math.abs(m[1][2]) * halfExt[2],
+    Math.abs(m[2][0]) * halfExt[0] + Math.abs(m[2][1]) * halfExt[1] + Math.abs(m[2][2]) * halfExt[2],
+  ];
+}
+
+// Generisch für alle Primitive-Typen (AABB-basiert, rotationsaware)
+export function getBBox(p: { position: Vec3; rotation?: Vec3 } & ({ size: Vec3 } | Primitive)): BBox {
   const ext = "type" in p
     ? getPrimitiveExtents(p as Primitive)
     : (p as { size: Vec3 }).size;
 
+  const halfExt: Vec3 = [ext[0] / 2, ext[1] / 2, ext[2] / 2];
+  const rot: Vec3 = p.rotation ?? [0, 0, 0];
+  const rhe = rotatedHalfExtents(halfExt, rot);
+
   return {
     min: [
-      p.position[0] - ext[0] / 2,
-      p.position[1] - ext[1] / 2,
-      p.position[2] - ext[2] / 2,
+      p.position[0] - rhe[0],
+      p.position[1] - rhe[1],
+      p.position[2] - rhe[2],
     ],
     max: [
-      p.position[0] + ext[0] / 2,
-      p.position[1] + ext[1] / 2,
-      p.position[2] + ext[2] / 2,
+      p.position[0] + rhe[0],
+      p.position[1] + rhe[1],
+      p.position[2] + rhe[2],
     ],
   };
 }
@@ -111,4 +141,36 @@ export function validateAll(
   return { valid, messages };
 }
 
-export const defaultConstraints: Constraint[] = [noOverlap, withinBounds];
+// Connectivity: jedes neue Primitive muss ein bestehendes berühren oder fast berühren
+// Verhindert freischwebende Teile
+export const connectivity: Constraint = {
+  name: "connectivity",
+  check(scene: Scene, newPrimitive: Primitive) {
+    // Erstes Primitive ist immer OK
+    if (scene.primitives.length === 0) return { valid: true };
+
+    const newBox = getBBox(newPrimitive);
+    let minDist = Infinity;
+
+    for (const existing of scene.primitives) {
+      const exBox = getBBox(existing);
+      // Berechne minimalen Abstand zwischen zwei AABBs
+      let distSq = 0;
+      for (let i = 0; i < 3; i++) {
+        const gap = Math.max(0, newBox.min[i] - exBox.max[i], exBox.min[i] - newBox.max[i]);
+        distSq += gap * gap;
+      }
+      minDist = Math.min(minDist, Math.sqrt(distSq));
+    }
+
+    if (minDist > CONNECTIVITY_THRESHOLD) {
+      return {
+        valid: false,
+        message: `"${newPrimitive.id}" schwebt frei (Abstand ${minDist.toFixed(2)} zum nächsten Primitive). Verschiebe es näher an ein bestehendes Teil.`,
+      };
+    }
+    return { valid: true };
+  },
+};
+
+export const defaultConstraints: Constraint[] = [noOverlap, withinBounds, connectivity];

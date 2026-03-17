@@ -1,6 +1,6 @@
 import type { Scene, PipelineConfig, GenerationPlan, Primitive } from "../core/types.js";
 import { getPrimitiveExtents } from "../core/types.js";
-import { createScene, addPrimitive, saveScene } from "../core/scene.js";
+import { createScene, addPrimitive, removePrimitive, modifyPrimitive, clonePrimitive, saveScene } from "../core/scene.js";
 import { validateAll, defaultConstraints, findOverlaps, getBBox } from "../core/constraints.js";
 import { buildPromptContext } from "../ai/prompt.js";
 import { planner, builder, critic } from "../ai/roles.js";
@@ -113,24 +113,32 @@ export async function extendPipeline(
 }
 
 // Baut eine detaillierte Fehlerbeschreibung für den Retry
-function buildCorrectionContext(primitive: Primitive, scene: Scene): string {
-  const overlaps = findOverlaps(scene, primitive);
+function buildCorrectionContext(primitive: Primitive, scene: Scene, validationMessages: string[]): string {
   const newBox = getBBox(primitive);
-
   const lines: string[] = [
-    `Your primitive "${primitive.id}" at position [${primitive.position}] with extents [${getPrimitiveExtents(primitive)}] OVERLAPS with existing primitives:`,
-    `Your cube's edges: x=[${newBox.min[0].toFixed(2)}, ${newBox.max[0].toFixed(2)}], y=[${newBox.min[1].toFixed(2)}, ${newBox.max[1].toFixed(2)}], z=[${newBox.min[2].toFixed(2)}, ${newBox.max[2].toFixed(2)}]`,
+    `Your primitive "${primitive.id}" at position [${primitive.position}] with rotation [${primitive.rotation}] FAILED validation:`,
+    `Your primitive's bounding box: x=[${newBox.min[0].toFixed(2)}, ${newBox.max[0].toFixed(2)}], y=[${newBox.min[1].toFixed(2)}, ${newBox.max[1].toFixed(2)}], z=[${newBox.min[2].toFixed(2)}, ${newBox.max[2].toFixed(2)}]`,
+    "",
+    "Errors:",
   ];
 
-  for (const o of overlaps) {
-    const axis = ["x", "y", "z"] as const;
-    const depthStr = o.depth.map((d, i) => `${axis[i]}: ${d.toFixed(2)} units`).join(", ");
-    lines.push(
-      `- "${o.existingId}": edges x=[${o.existingBBox.min[0].toFixed(2)}, ${o.existingBBox.max[0].toFixed(2)}], y=[${o.existingBBox.min[1].toFixed(2)}, ${o.existingBBox.max[1].toFixed(2)}], z=[${o.existingBBox.min[2].toFixed(2)}, ${o.existingBBox.max[2].toFixed(2)}] — penetration: ${depthStr}`,
-    );
+  for (const msg of validationMessages) {
+    lines.push(`- ${msg}`);
   }
 
-  lines.push("", "Fix: adjust position so your cube's edges do NOT overlap on all 3 axes with any existing cube.");
+  const overlaps = findOverlaps(scene, primitive);
+  if (overlaps.length > 0) {
+    lines.push("", "Overlapping primitives:");
+    for (const o of overlaps) {
+      const axis = ["x", "y", "z"] as const;
+      const depthStr = o.depth.map((d, i) => `${axis[i]}: ${d.toFixed(2)} units`).join(", ");
+      lines.push(
+        `- "${o.existingId}": edges x=[${o.existingBBox.min[0].toFixed(2)}, ${o.existingBBox.max[0].toFixed(2)}], y=[${o.existingBBox.min[1].toFixed(2)}, ${o.existingBBox.max[1].toFixed(2)}], z=[${o.existingBBox.min[2].toFixed(2)}, ${o.existingBBox.max[2].toFixed(2)}] — penetration: ${depthStr}`,
+      );
+    }
+  }
+
+  lines.push("", "Fix: adjust position (and/or rotation) so your primitive does NOT overlap and DOES connect to an existing primitive.");
   return lines.join("\n");
 }
 
@@ -152,6 +160,44 @@ export async function executeStep(
 
     // Validate
     const validation = validateAll(defaultConstraints, scene, genStep.primitive);
+
+    // Handle non-add actions (no constraint check needed)
+    if (genStep.action === "remove" && genStep.targetId) {
+      const newScene = removePrimitive(scene, genStep.targetId);
+      log(`- ${genStep.targetId}: ${genStep.reasoning}`, "success");
+      const review = await critic(newScene, plan, currentStep + 1);
+      if (review.feedback) log(`Critic: ${review.feedback}`, "info");
+      const nextStepNum = currentStep + 1;
+      const isComplete = review.isComplete || nextStepNum >= plan.estimatedSteps;
+      if (isComplete) log("Generierung abgeschlossen!", "success");
+      const newState: PipelineState = { scene: newScene, plan, currentStep: nextStepNum, isComplete, isRunning: pState.isRunning };
+      saveScene(newScene); state = newState; return newState;
+    }
+
+    if (genStep.action === "modify" && genStep.targetId && genStep.changes) {
+      const newScene = modifyPrimitive(scene, genStep.targetId, genStep.changes);
+      log(`~ ${genStep.targetId}: ${genStep.reasoning}`, "success");
+      const review = await critic(newScene, plan, currentStep + 1);
+      if (review.feedback) log(`Critic: ${review.feedback}`, "info");
+      const nextStepNum = currentStep + 1;
+      const isComplete = review.isComplete || nextStepNum >= plan.estimatedSteps;
+      if (isComplete) log("Generierung abgeschlossen!", "success");
+      const newState: PipelineState = { scene: newScene, plan, currentStep: nextStepNum, isComplete, isRunning: pState.isRunning };
+      saveScene(newScene); state = newState; return newState;
+    }
+
+    if (genStep.action === "clone" && genStep.targetId) {
+      const newId = genStep.primitive?.id ?? `${genStep.targetId}-clone`;
+      const newScene = clonePrimitive(scene, genStep.targetId, newId, genStep.mirror);
+      log(`⧉ ${genStep.targetId} → ${newId}${genStep.mirror ? ` (mirror ${genStep.mirror})` : ""}: ${genStep.reasoning}`, "success");
+      const review = await critic(newScene, plan, currentStep + 1);
+      if (review.feedback) log(`Critic: ${review.feedback}`, "info");
+      const nextStepNum = currentStep + 1;
+      const isComplete = review.isComplete || nextStepNum >= plan.estimatedSteps;
+      if (isComplete) log("Generierung abgeschlossen!", "success");
+      const newState: PipelineState = { scene: newScene, plan, currentStep: nextStepNum, isComplete, isRunning: pState.isRunning };
+      saveScene(newScene); state = newState; return newState;
+    }
 
     if (validation.valid) {
       // Erfolgreich – Primitive hinzufügen
@@ -183,8 +229,8 @@ export async function executeStep(
 
     // Fehlgeschlagen – Retry vorbereiten
     if (attempt < MAX_RETRIES) {
-      correctionContext = buildCorrectionContext(genStep.primitive, scene);
-      log(`Overlap erkannt, Retry ${attempt + 1}/${MAX_RETRIES}...`, "warn");
+      correctionContext = buildCorrectionContext(genStep.primitive, scene, validation.messages);
+      log(`Validierung fehlgeschlagen, Retry ${attempt + 1}/${MAX_RETRIES}...`, "warn");
     } else {
       log(`Schritt übersprungen nach ${MAX_RETRIES} Retries: ${validation.messages.join(", ")}`, "error");
     }

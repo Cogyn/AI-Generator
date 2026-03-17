@@ -76,9 +76,25 @@ export interface SceneSnapshot {
 
 export interface GenerationStep {
   stepNumber: number;
-  action: "add" | "modify" | "remove";
-  primitive: Primitive;
+  action: "add" | "remove" | "modify" | "clone";
+  primitive: Primitive;          // für add
+  targetId?: string;             // für remove / modify / clone
+  changes?: Partial<PrimitiveChanges>; // für modify
+  mirror?: "x" | "y" | "z";     // für clone: Spiegelachse
   reasoning: string;
+}
+
+// Felder die per modify geändert werden können
+export interface PrimitiveChanges {
+  position: Vec3;
+  rotation: Vec3;
+  color: string;
+  // size-bezogene Felder
+  size: Vec3;
+  radius: number;
+  radiusTop: number;
+  radiusBottom: number;
+  height: number;
 }
 
 export interface GenerationPlan {
@@ -192,6 +208,7 @@ export interface RegionAssignment {
 export interface MergeResult {
   scene: Scene;
   conflicts: MergeConflict[];
+  droppedPrimitives: Primitive[];
   resolved: boolean;
 }
 
@@ -201,4 +218,29 @@ export interface MergeConflict {
   regionB: string;
   description: string;
   affectedPrimitives: string[]; // IDs
+}
+
+// ─── Combiner (neues Parallel-Modell) ───────────────────────
+
+// Ein Part-Gruppe: lokal gebaute Primitives eines Builders
+export interface PartGroup {
+  partId: string;
+  label: string;
+  primitives: Primitive[];    // in lokalen Koordinaten (Ursprung ~0,0,0)
+  localBounds: AABB;          // auto-berechnet aus Primitives
+}
+
+// Wie ein Part-Gruppe in die Hauptszene transformiert wird
+export interface PartTransform {
+  partId: string;
+  scale: number;              // uniformer Skalierungsfaktor
+  offset: Vec3;               // Translation ins Hauptfenster
+  rotation?: Vec3;            // optionale Rotation der ganzen Gruppe (Grad)
+}
+
+// Ergebnis des Combiners
+export interface CombinerResult {
+  scene: Scene;
+  transforms: PartTransform[];
+  issues: string[];
 }

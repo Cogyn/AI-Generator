@@ -1,31 +1,29 @@
-// Parallele Pipeline: Partitionieren → Builder pro Region → Merge → Validate → Critic
-// MVP: Sequentiell ausgeführt, Architektur bereit für echte Parallelität
+// Parallele Pipeline: Partitionieren → lokale Builder → Combiner → Critic
 
-import type { Scene, ScenePartition, MergeResult } from "../../core/types.js";
+import type { Scene, ScenePartition, CombinerResult } from "../../core/types.js";
 import { createScene, saveScene } from "../../core/scene.js";
 import { partitionWithAI, createSingleRegionPartition } from "./partitioner.js";
 import { createBuilderTasks, executeBuilderTasks } from "./coordinator.js";
-import { mergeResults } from "./merger.js";
-import { validateBoundaries } from "./boundary-validator.js";
+import { buildPartGroups, combineParts } from "./combiner.js";
 import { globalCritic } from "./global-critic.js";
 import type { LogFn, OnStepFn } from "../pipeline.js";
 
 export interface ParallelPipelineConfig {
   maxPrimitivesPerRegion: number;
-  parallel: boolean; // echte Parallelität oder sequentiell
+  parallel: boolean;
   maxRegions: number;
 }
 
 const defaultConfig: ParallelPipelineConfig = {
   maxPrimitivesPerRegion: 10,
-  parallel: false, // MVP: sequentiell
-  maxRegions: 4,
+  parallel: true,
+  maxRegions: 5,
 };
 
 export interface ParallelPipelineResult {
   scene: Scene;
   partition: ScenePartition;
-  mergeResult: MergeResult;
+  combinerResult: CombinerResult;
   qualityScore: number;
 }
 
@@ -37,63 +35,56 @@ export async function runParallelPipeline(
   onStep?: OnStepFn,
 ): Promise<ParallelPipelineResult> {
   const cfg = { ...defaultConfig, ...config };
-
-  const scene = existingScene ?? createScene(userPrompt);
+  const pipelineStart = performance.now();
   log("=== Parallele Pipeline gestartet ===", "info");
 
-  // 1. Partitionieren
-  log("Partitioniere Aufgabe...", "info");
+  // 1. Semantische Partitionierung
+  log("Zerlege Aufgabe in Parts...", "info");
   let partition: ScenePartition;
   try {
-    partition = await partitionWithAI(userPrompt, scene);
-    log(`${partition.regions.length} Regionen erstellt`, "success");
+    partition = await partitionWithAI(userPrompt, existingScene ?? createScene(userPrompt));
+    log(`${partition.regions.length} Parts erstellt`, "success");
   } catch {
     log("Partitionierung fehlgeschlagen, nutze Fallback", "warn");
     partition = createSingleRegionPartition(userPrompt);
   }
 
-  // Log Regionen
+  // Log Parts
   for (const r of partition.regions) {
     const a = partition.assignments.find((a) => a.regionId === r.id);
-    log(`  Region "${r.label}": ${a?.localGoal ?? "–"}`, "info");
+    log(`  Part "${r.label}": ${a?.localGoal ?? "–"}`, "info");
   }
 
-  // 2. Builder-Tasks erstellen
-  const tasks = createBuilderTasks(partition, scene.primitives);
+  // 2. Builder-Tasks erstellen (lokal, ohne Bounds)
+  const tasks = createBuilderTasks(partition);
 
-  // 3. Builder ausführen
+  // 3. Builder parallel ausführen (jeder in eigenem lokalen Raum)
+  log("Builder arbeiten in lokalen Räumen...", "info");
   const results = await executeBuilderTasks(tasks, log, cfg.parallel);
 
-  // 4. Ergebnisse mergen
-  log("Merge der Ergebnisse...", "info");
-  const mergeResult = mergeResults(scene, results);
+  const totalPrimitives = results.reduce((sum, r) => sum + r.addedPrimitives.length, 0);
+  log(`${totalPrimitives} Primitives insgesamt erzeugt`, "success");
 
-  if (mergeResult.conflicts.length > 0) {
-    log(`${mergeResult.conflicts.length} Merge-Konflikte erkannt`, "warn");
-    for (const c of mergeResult.conflicts) {
-      log(`  ${c.type}: ${c.description}`, "warn");
+  // 4. Part-Gruppen erstellen
+  const labels = new Map(partition.regions.map((r) => [r.id, r.label]));
+  const partGroups = buildPartGroups(results, labels);
+
+  // 5. Combiner: skaliert und positioniert Parts
+  log("Combiner: Assembliere Parts...", "info");
+  const combinerResult = await combineParts(partGroups, partition.styleDirectives, existingScene);
+
+  if (combinerResult.issues.length > 0) {
+    for (const issue of combinerResult.issues) {
+      log(`  Combiner: ${issue}`, "warn");
     }
-  } else {
-    log("Merge konfliktfrei", "success");
   }
+  log(`Combiner: ${combinerResult.scene.primitives.length} Primitives in Hauptszene`, "success");
 
-  onStep?.(mergeResult.scene, mergeResult.scene.primitives.length);
-
-  // 5. Boundary-Validierung
-  log("Prüfe Boundary-Übergänge...", "info");
-  const boundaryResult = validateBoundaries(mergeResult.scene, partition);
-  if (!boundaryResult.valid) {
-    for (const c of boundaryResult.conflicts) {
-      log(`  Boundary: ${c.description}`, "warn");
-    }
-  } else {
-    log("Boundaries OK", "success");
-  }
+  onStep?.(combinerResult.scene, combinerResult.scene.primitives.length);
 
   // 6. Global Critic
   log("Globale Bewertung...", "info");
-  const allConflicts = [...mergeResult.conflicts, ...boundaryResult.conflicts];
-  const criticResult = await globalCritic(mergeResult.scene, partition.styleDirectives, allConflicts);
+  const criticResult = await globalCritic(combinerResult.scene, partition.styleDirectives, []);
   log(`Qualität: ${(criticResult.qualityScore * 100).toFixed(0)}% – ${criticResult.feedback}`, "success");
 
   if (criticResult.issues.length > 0) {
@@ -103,13 +94,14 @@ export async function runParallelPipeline(
   }
 
   // 7. Speichern
-  saveScene(mergeResult.scene);
-  log("=== Parallele Pipeline abgeschlossen ===", "success");
+  saveScene(combinerResult.scene);
+  const pipelineElapsed = performance.now() - pipelineStart;
+  log(`=== Pipeline abgeschlossen in ${(pipelineElapsed / 1000).toFixed(1)}s ===`, "success");
 
   return {
-    scene: mergeResult.scene,
+    scene: combinerResult.scene,
     partition,
-    mergeResult,
+    combinerResult,
     qualityScore: criticResult.qualityScore,
   };
 }

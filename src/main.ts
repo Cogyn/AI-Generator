@@ -1,6 +1,7 @@
 import { initRenderer, syncScene, clearRenderer } from "./renderer/preview.js";
 import { startPipeline, extendPipeline, nextStep, getPipelineState, type PipelineState } from "./generator/pipeline.js";
-import { loadScene, clearScene } from "./core/scene.js";
+import { runParallelPipeline } from "./generator/parallel/index.js";
+import { loadScene, clearScene, undo, canUndo, clearUndo, saveScene } from "./core/scene.js";
 import { getSettings, saveSettings, hasApiKey } from "./ai/client.js";
 import type { Scene } from "./core/types.js";
 
@@ -10,6 +11,7 @@ const promptInput = document.getElementById("prompt-input") as HTMLTextAreaEleme
 const generateBtn = document.getElementById("generate-btn") as HTMLButtonElement;
 const extendBtn = document.getElementById("extend-btn") as HTMLButtonElement;
 const stepBtn = document.getElementById("step-btn") as HTMLButtonElement;
+const undoBtn = document.getElementById("undo-btn") as HTMLButtonElement;
 const resetBtn = document.getElementById("reset-btn") as HTMLButtonElement;
 const settingsBtn = document.getElementById("settings-btn") as HTMLButtonElement;
 const settingsModal = document.getElementById("settings-modal") as HTMLDivElement;
@@ -17,6 +19,7 @@ const apiKeyInput = document.getElementById("api-key-input") as HTMLInputElement
 const modelSelect = document.getElementById("model-select") as HTMLSelectElement;
 const saveSettingsBtn = document.getElementById("save-settings") as HTMLButtonElement;
 const closeSettingsBtn = document.getElementById("close-settings") as HTMLButtonElement;
+const parallelToggle = document.getElementById("parallel-toggle") as HTMLInputElement;
 const planSection = document.getElementById("plan-section") as HTMLElement;
 const planDisplay = document.getElementById("plan-display") as HTMLDivElement;
 const logEl = document.getElementById("log") as HTMLDivElement;
@@ -25,6 +28,18 @@ const stepCountEl = document.getElementById("step-count") as HTMLSpanElement;
 
 // Track current scene for extend functionality
 let currentScene: Scene | null = null;
+
+// Restore parallel toggle state from localStorage
+const savedParallel = localStorage.getItem("ai-gen-parallel");
+if (savedParallel === "true") parallelToggle.checked = true;
+parallelToggle.addEventListener("change", () => {
+  localStorage.setItem("ai-gen-parallel", String(parallelToggle.checked));
+  stepBtn.disabled = parallelToggle.checked || stepBtn.disabled;
+});
+
+function isParallelMode(): boolean {
+  return parallelToggle.checked;
+}
 
 // Init
 initRenderer(canvas);
@@ -79,12 +94,23 @@ generateBtn.addEventListener("click", async () => {
   logEl.innerHTML = "";
 
   try {
-    await startPipeline(prompt, { maxSteps: 10, autoRun: true }, log, onStep);
-    finishPipeline();
+    if (isParallelMode()) {
+      const result = await runParallelPipeline(prompt, undefined, {}, log, onStep);
+      currentScene = result.scene;
+      syncScene(result.scene);
+      updateInfo(result.scene);
+      updateExtendButton();
+      updateUndoButton();
+      showParallelPlan(result.partition, result.qualityScore);
+    } else {
+      await startPipeline(prompt, { maxSteps: 10, autoRun: true }, log, onStep);
+      finishPipeline();
+    }
   } catch (err) {
     log(`Fehler: ${(err as Error).message}`, "error");
   } finally {
     setGenerating(false, "generate");
+    updateUndoButton();
   }
 });
 
@@ -98,12 +124,23 @@ extendBtn.addEventListener("click", async () => {
   logEl.innerHTML = "";
 
   try {
-    await extendPipeline(prompt, currentScene, { maxSteps: 10, autoRun: true }, log, onStep);
-    finishPipeline();
+    if (isParallelMode()) {
+      const result = await runParallelPipeline(prompt, currentScene, {}, log, onStep);
+      currentScene = result.scene;
+      syncScene(result.scene);
+      updateInfo(result.scene);
+      updateExtendButton();
+      updateUndoButton();
+      showParallelPlan(result.partition, result.qualityScore);
+    } else {
+      await extendPipeline(prompt, currentScene, { maxSteps: 10, autoRun: true }, log, onStep);
+      finishPipeline();
+    }
   } catch (err) {
     log(`Fehler: ${(err as Error).message}`, "error");
   } finally {
     setGenerating(false, "extend");
+    updateUndoButton();
   }
 });
 
@@ -126,14 +163,30 @@ stepBtn.addEventListener("click", async () => {
   }
 });
 
+// --- Undo ---
+undoBtn.addEventListener("click", () => {
+  const prev = undo();
+  if (prev) {
+    currentScene = prev;
+    syncScene(prev);
+    saveScene(prev);
+    updateInfo(prev);
+    updateExtendButton();
+    updateUndoButton();
+    log("Undo durchgeführt", "info");
+  }
+});
+
 // --- Reset ---
 resetBtn.addEventListener("click", () => {
   clearRenderer();
   clearScene();
+  clearUndo();
   currentScene = null;
   planSection.classList.add("hidden");
   logEl.innerHTML = "";
   stepBtn.disabled = true;
+  undoBtn.disabled = true;
   updateInfo(null);
   updateExtendButton();
   log("Scene zurückgesetzt", "info");
@@ -166,6 +219,7 @@ function onStep(scene: Scene, _stepNum: number): void {
   syncScene(scene);
   updateInfo(scene);
   updateExtendButton();
+  updateUndoButton();
 }
 
 function updateInfo(scene: Scene | null): void {
@@ -179,6 +233,10 @@ function updateExtendButton(): void {
   extendBtn.disabled = !currentScene || currentScene.primitives.length === 0;
 }
 
+function updateUndoButton(): void {
+  undoBtn.disabled = !canUndo();
+}
+
 function updatePlan(state: PipelineState): void {
   planSection.classList.remove("hidden");
   planDisplay.innerHTML = state.plan.steps
@@ -189,6 +247,20 @@ function updatePlan(state: PipelineState): void {
       return `<div class="plan-step ${cls}"><span class="plan-step-num">${i + 1}.</span> ${s}</div>`;
     })
     .join("");
+}
+
+function showParallelPlan(partition: import("./core/types.js").ScenePartition, qualityScore: number): void {
+  planSection.classList.remove("hidden");
+  const regionsHtml = partition.regions.map((r) => {
+    const assignment = partition.assignments.find((a) => a.regionId === r.id);
+    return `<div class="plan-region"><span class="plan-region-label">${r.label}</span><span class="plan-region-goal"> — ${assignment?.localGoal ?? ""}</span></div>`;
+  }).join("");
+
+  const pct = Math.round(qualityScore * 100);
+  const cls = pct >= 70 ? "good" : pct >= 40 ? "ok" : "bad";
+  const qualityHtml = `<div class="plan-quality ${cls}">Quality: ${pct}%</div>`;
+
+  planDisplay.innerHTML = regionsHtml + qualityHtml;
 }
 
 function log(msg: string, level: "info" | "success" | "warn" | "error" = "info"): void {
