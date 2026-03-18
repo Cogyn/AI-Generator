@@ -314,6 +314,34 @@ button:disabled {
 .plan-quality.ok { color: var(--warning); }
 .plan-quality.bad { color: var(--danger); }
 
+.plan-info {
+  margin-bottom: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  background: var(--surface-2);
+  border-radius: 6px;
+  border-left: 3px solid var(--primary);
+}
+.plan-info-title {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: var(--text-1);
+}
+.plan-info-detail {
+  font-size: 0.75rem;
+  color: var(--text-2);
+  margin-top: 0.15rem;
+}
+
+.plan-tokens {
+  margin-top: 0.4rem;
+  padding: 0.3rem 0.6rem;
+  background: var(--surface-2);
+  border-radius: 6px;
+  font-size: 0.75rem;
+  color: var(--text-2);
+  font-family: monospace;
+}
+
 /* Log */
 #log {
   font-size: 0.75rem;

@@ -1,4 +1,9 @@
-import type { Scene, Primitive, PrimitiveChanges, Vec3 } from "./types.js";
+import type {
+  Scene, Primitive, PrimitiveChanges, Vec3,
+  SceneExt, WorkRegionExt, MeshOperation, TokenMetrics, SceneStatistics, AABB,
+} from "./types.js";
+import { getPrimitiveExtents } from "./types.js";
+import { getBBox } from "./constraints.js";
 
 const STORAGE_KEY = "ai-gen-scene";
 const MAX_UNDO = 30;
@@ -163,4 +168,111 @@ export function loadScene(): Scene | null {
 
 export function clearScene(): void {
   localStorage.removeItem(STORAGE_KEY);
+}
+
+// ─── Extended Scene (mit Regionen, Ops-Log, Token-Metriken) ─
+
+export function createSceneExt(name: string): SceneExt {
+  return {
+    ...createScene(name),
+    regions: [],
+    meshOpsLog: [],
+    tokenMetrics: { totalTokensIn: 0, totalTokensOut: 0, stepsCompleted: 0, avgTokensPerStep: 0 },
+  };
+}
+
+export function addRegion(scene: SceneExt, region: WorkRegionExt): SceneExt {
+  return {
+    ...scene,
+    regions: [...scene.regions, region],
+    metadata: { ...scene.metadata, updatedAt: new Date().toISOString() },
+  };
+}
+
+export function logMeshOps(scene: SceneExt, ops: MeshOperation[]): SceneExt {
+  return {
+    ...scene,
+    meshOpsLog: [...scene.meshOpsLog, ...ops],
+    metadata: { ...scene.metadata, updatedAt: new Date().toISOString() },
+  };
+}
+
+export function updateTokenMetrics(scene: SceneExt, tokensIn: number, tokensOut: number): SceneExt {
+  const m = scene.tokenMetrics;
+  const newIn = m.totalTokensIn + tokensIn;
+  const newOut = m.totalTokensOut + tokensOut;
+  const steps = m.stepsCompleted + 1;
+  return {
+    ...scene,
+    tokenMetrics: {
+      totalTokensIn: newIn,
+      totalTokensOut: newOut,
+      stepsCompleted: steps,
+      avgTokensPerStep: (newIn + newOut) / steps,
+    },
+  };
+}
+
+// ─── Scene Statistics (kompakte Zusammenfassung, keine raw Vertices) ─
+
+export function computeSceneStatistics(scene: Scene, regionCount = 0, opCount = 0): SceneStatistics {
+  const prims = scene.primitives;
+  if (prims.length === 0) {
+    return {
+      primitiveCount: 0, regionCount, operationCount: opCount,
+      densityAvg: 0, heightRange: [0, 0], variationScore: 0,
+      collisionIndicators: 0, boundingBox: { min: [0, 0, 0], max: [0, 0, 0] },
+      typeDistribution: {},
+    };
+  }
+
+  const bb: AABB = { min: [Infinity, Infinity, Infinity], max: [-Infinity, -Infinity, -Infinity] };
+  const typeDist: Record<string, number> = {};
+  let minY = Infinity, maxY = -Infinity;
+
+  for (const p of prims) {
+    const box = getBBox(p);
+    for (let i = 0; i < 3; i++) {
+      bb.min[i] = Math.min(bb.min[i], box.min[i]);
+      bb.max[i] = Math.max(bb.max[i], box.max[i]);
+    }
+    minY = Math.min(minY, box.min[1]);
+    maxY = Math.max(maxY, box.max[1]);
+    typeDist[p.type] = (typeDist[p.type] ?? 0) + 1;
+  }
+
+  // Variationscore: wie viele verschiedene Typen/Farben
+  const uniqueColors = new Set(prims.map((p) => p.color)).size;
+  const uniqueTypes = Object.keys(typeDist).length;
+  const variation = Math.min(1, (uniqueColors + uniqueTypes) / (prims.length * 0.5));
+
+  // Dichte: Primitives pro Volumen-Einheit
+  const vol = (bb.max[0] - bb.min[0]) * Math.max(0.1, bb.max[1] - bb.min[1]) * (bb.max[2] - bb.min[2]);
+  const density = vol > 0 ? prims.length / vol : 0;
+
+  // Kollisionsindikatoren (einfache O(n²) Prüfung, nur Count)
+  let collisions = 0;
+  for (let i = 0; i < prims.length; i++) {
+    const a = getBBox(prims[i]);
+    for (let j = i + 1; j < prims.length; j++) {
+      const b = getBBox(prims[j]);
+      let overlaps = true;
+      for (let k = 0; k < 3; k++) {
+        if (a.max[k] <= b.min[k] + 0.05 || b.max[k] <= a.min[k] + 0.05) { overlaps = false; break; }
+      }
+      if (overlaps) collisions++;
+    }
+  }
+
+  return {
+    primitiveCount: prims.length,
+    regionCount,
+    operationCount: opCount,
+    densityAvg: +density.toFixed(3),
+    heightRange: [+minY.toFixed(2), +maxY.toFixed(2)],
+    variationScore: +variation.toFixed(2),
+    collisionIndicators: collisions,
+    boundingBox: bb,
+    typeDistribution: typeDist,
+  };
 }

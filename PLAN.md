@@ -1,201 +1,213 @@
-# AI Structure Generator – Projektplan
+# CLAUDE.md
 
-## Vision
+## Projektziel
 
-Ein iteratives, zustandsbasiertes Generierungssystem für 3D-Strukturen.
-Mehrere KI-Builder arbeiten kollektiv an verschiedenen Bereichen einer Szene –
-koordiniert durch einen Planner, validiert durch Boundary-Checks und einen Global Critic.
+Dieses Projekt ist kein klassischer Text-zu-3D-Generator.
 
----
+Es wird ein kontrollierbares World-Generation-System für:
+- detaillierte Terrainwelten,
+- logisches natürliches Placement,
+- Infrastruktur wie Wege, Straßen, Brücken und Übergänge,
+- Landmarken, Reliefs, Naturwunder,
+- selektive lokale KI-Bearbeitung,
+- spätere Animationen und zeitliche Zustände.
 
-## Architektur-Übersicht
+Der Kern des Projekts ist:
+**KI plant und beschreibt. Das Programm baut, prüft, repariert und speichert.**
 
-### Phase 1: Lineare Pipeline (MVP, implementiert)
+KI soll nicht rohe Meshdaten oder Vertexlisten erzeugen.
+Stattdessen arbeitet sie mit:
+- PlanObjects,
+- Regionen,
+- Objektlisten,
+- Asset-Referenzen,
+- Constraint-Specs,
+- strukturierten Metriken.
 
-```
-User Prompt
-    ↓
-[Planner]  →  Schrittplan
-    ↓
-[Builder]  →  Ein Primitive pro Schritt (mit Retry bei Overlap)
-    ↓
-[Constraints]  →  Overlap / Bounds prüfen
-    ↓
-[Critic]  →  Schritt bewerten
-    ↓
-[Three.js]  →  Live 3D Preview
-    ↓
-Nächster Schritt oder Fertig
-```
+## Architekturprinzipien
 
-### Phase 2: Parallele / Kollektive Pipeline (Grundgerüst, neu)
+1. Der globale World State ist die zentrale Wahrheit.
+2. Regionen/Patches sind lokale Bearbeitungsräume.
+3. Jedes Objekt existiert explizit in einer Object Registry.
+4. Objektbeziehungen müssen nachvollziehbar modelliert werden.
+5. KI darf nur markierte Regionen/Objekte verändern.
+6. Gelockte oder manuell überschriebene Elemente dürfen nicht still verändert werden.
+7. Lokale Bearbeitung ist wichtiger als globale Komplettregeneration.
+8. Kostenminimierung ist Pflicht.
+9. Strukturierte Daten sind wichtiger als freie Textmagie.
+10. Erst Fundament, dann Komplexität.
 
-```
-User Prompt
-    ↓
-[Planner]  →  Ziel & Stilrichtung analysieren
-    ↓
-[Partitioner]  →  Szene in WorkRegions aufteilen
-    ↓
-[Coordinator]  →  BuilderTasks erzeugen
-    ↓
-┌──────────┬──────────┬──────────┐
-│ Builder  │ Builder  │ Builder  │  (parallel oder sequentiell)
-│ Region A │ Region B │ Region C │
-│ + lokaler│ + lokaler│ + lokaler│
-│   Kontext│   Kontext│   Kontext│
-│ + Bound. │ + Bound. │ + Bound. │
-│   Context│   Context│   Context│
-└────┬─────┴────┬─────┴────┬─────┘
-     ↓          ↓          ↓
-[Merger]  →  Regionale Ergebnisse zusammenführen
-    ↓
-[BoundaryValidator]  →  Übergänge zwischen Regionen prüfen
-    ↓
-[GlobalCritic]  →  Gesamtszene bewerten (Stil, Kohärenz, Qualität)
-    ↓
-[Scene State]  →  Finaler globaler Zustand
-```
+## Langfristige Systembestandteile
 
----
+Das Projekt soll schrittweise diese Bausteine bekommen:
 
-## Kernprinzip: Lokaler Kontext mit Boundary-Awareness
+- World State
+- Region-/Patch-System
+- Object Registry
+- Asset Registry
+- Constraint-Spec-System
+- Placement Solver
+- Validatoren
+- Repair-System
+- Terrain-Generator
+- Infrastruktur-Generator
+- User-Interaktionssystem
+- Selektive KI-Bearbeitung
+- Später: Animation / Timeline / Ereignisse
 
-Jeder Builder erhält:
+## Objektmodell
 
-| Kontextebene | Was der Builder sieht |
-|---|---|
-| **Lokal** | Nur Primitives in seiner eigenen Region |
-| **Boundary** | Primitives nahe der Grenze zu Nachbarregionen |
-| **Global** | Stilrichtung, Farbpalette, Zielformulierung |
+Objekte sind immer explizit registrierte Einheiten mit:
+- id
+- name
+- type
+- category
+- subtype
+- region_id
+- parent_id
+- anchor_id
+- editable
+- locked
+- ai_allowed
+- manual_override
+- transform
+- state
+- tags
+- constraints
 
-Builder sehen **nicht** die gesamte Szene. Das ermöglicht:
-- Parallelisierung (kein globaler Lock)
-- Fokussierte, kleinere Prompts
-- Weniger Token-Verbrauch pro Call
-- Skalierung auf komplexere Szenen
+Objektbeziehungen sollen vorbereitet und später ausgebaut werden:
+- on_top_of
+- under
+- inside
+- attached_to
+- near
+- connected_to
 
-### Risiko: Rein isolierte Builder
+Warum:
+Nur so können User und System nachvollziehen,
+- was existiert,
+- was verändert werden darf,
+- welche Regeln gelten,
+- was lokal bearbeitet oder repariert werden soll.
 
-Komplett isolierte Builder ohne Boundary-Kontext erzeugen Lücken, Stilbrüche
-und nicht-zusammenhängende Strukturen. Deshalb:
-- Jeder Builder bekommt Primitives nahe der Regionengrenze als Kontext
-- GlobalStyleDirectives sorgen für einheitlichen Stil
-- Nach dem Merge prüft der BoundaryValidator die Übergänge
-- Der GlobalCritic bewertet die Gesamtszene
+## Regionen
 
-### Grenzen des Ansatzes
+Regionen sind lokale Bearbeitungsbereiche.
 
-- Schwierig bei Objekten die keine räumliche Trennung erlauben (z.B. ein einzelnes verschränktes Netz)
-- Boundary-Kontext ist ein Kompromiss – zu wenig = Lücken, zu viel = kein Parallelitätsgewinn
-- Sinnvoll ab ~10+ Primitives pro Szene, darunter ist lineare Pipeline effizienter
+Jede Region braucht mindestens:
+- region_id
+- name
+- type
+- bounds
+- object_ids
+- editable
+- locked
+- ai_allowed
+- tags
+- metadata
 
----
+Ziel:
+Spätere KI-Bearbeitung soll gezielt nur auf ausgewählte Regionen wirken können.
 
-## Module
+## KI-Rolle im Projekt
 
-| Modul | Status | Verantwortung |
-|---|---|---|
-| `core/types.ts` | **aktiv** | Alle Interfaces (Scene, Primitive, Partition, Task, etc.) |
-| `core/scene.ts` | **aktiv** | Scene CRUD + localStorage |
-| `core/constraints.ts` | **aktiv** | Overlap / Bounds (generisch für alle Primitive-Typen) |
-| `ai/client.ts` | **aktiv** | OpenAI API Client |
-| `ai/roles.ts` | **aktiv** | Planner, Builder, Critic (lineare Pipeline) |
-| `ai/prompt.ts` | **aktiv** | System-Prompts (lineare Pipeline) |
-| `generator/pipeline.ts` | **aktiv** | Lineare Pipeline + Extend |
-| `generator/parallel/partitioner.ts` | **Gerüst** | Aufgabe in Regionen zerlegen |
-| `generator/parallel/coordinator.ts` | **Gerüst** | BuilderTasks erstellen & orchestrieren |
-| `generator/parallel/region-builder.ts` | **Gerüst** | Builder pro Region |
-| `generator/parallel/merger.ts` | **Gerüst** | Ergebnisse zusammenführen, Konflikte erkennen |
-| `generator/parallel/boundary-validator.ts` | **Gerüst** | Übergänge zwischen Regionen prüfen |
-| `generator/parallel/global-critic.ts` | **Gerüst** | Gesamtszene bewerten |
-| `generator/parallel/pipeline.ts` | **Gerüst** | Orchestrierung der parallelen Pipeline |
-| `renderer/preview.ts` | **aktiv** | Three.js Renderer |
-| `main.ts` | **aktiv** | UI + Event-Handling |
+KI ist in diesem Projekt kein freier Geometrie-Generator.
 
----
+KI-Aufgaben:
+- Nutzerintention verstehen
+- Ziele strukturieren
+- PlanObjects erzeugen
+- Objekte kategorisieren
+- Asset-/Objektvorschläge machen
+- Constraint-Specs formulieren
+- Reparaturvorschläge machen
+- Lokale Bearbeitungsaufgaben definieren
 
-## Primitive-System
+Programm-Aufgaben:
+- World State verwalten
+- Regionen verwalten
+- Objekte registrieren
+- Platzierung berechnen
+- Constraints lösen
+- Kollisionen prüfen
+- Support prüfen
+- Übergänge prüfen
+- reparieren
+- serialisieren
+- editierbare Zustände speichern
 
-| Typ | Status | Properties |
-|---|---|---|
-| `cube` | **aktiv** | position, size [w,h,d], rotation, color, tags |
-| `sphere` | **vorbereitet** | position, radius, rotation, color, tags |
-| `cylinder` | **vorbereitet** | position, radiusTop, radiusBottom, height, rotation, color, tags |
-| `polyhedron` | geplant | – |
-| `mesh-patch` | geplant | – |
+## Kostenregeln
 
-Alle Primitives teilen `PrimitiveBase` (id, type, position, rotation, color, tags).
-`getPrimitiveExtents()` liefert die AABB-Ausdehnung für jeden Typ.
+Kosten müssen aktiv minimiert werden.
 
----
+Daher:
+- keine raw Vertices/Faces an KI
+- keine unnötigen Vollbild-Screenshots
+- keine Full-World-Kontexte bei lokalen Änderungen
+- stattdessen:
+  - Region Summaries
+  - Objektlisten
+  - Asset-Referenzen
+  - Constraint-Specs
+  - strukturierte Metriken
 
-## Datenfluss: Parallele Pipeline im Detail
+Lokale Bearbeitung hat Vorrang vor globaler Neuerzeugung.
 
-```
-1. User Prompt + existierende Scene
-    ↓
-2. Partitioner fragt LLM:
-   "Zerlege dieses Objekt in 2-4 räumliche Regionen"
-   → ScenePartition { regions[], assignments[], styleDirectives }
-    ↓
-3. Coordinator erstellt BuilderTasks:
-   - Pro Region: lokales Ziel, Bounds, erlaubte Primitive-Typen
-   - Pro Region: BoundaryContext (Nachbar-Primitives nahe der Grenze)
-   - Global: StyleDirectives (Farben, Stil, Gesamtziel)
-    ↓
-4. Builder pro Region (parallel oder sequentiell):
-   - Erhält nur eigene Region + Boundary + Style
-   - Erzeugt N Primitives innerhalb der Region-Bounds
-   - Gibt BuilderResult zurück (kein globaler Write)
-    ↓
-5. Merger:
-   - Sammelt alle BuilderResults
-   - Prüft Cross-Region Overlaps
-   - Fügt konfliktfreie Primitives in Scene ein
-   - Listet MergeConflicts auf
-    ↓
-6. BoundaryValidator:
-   - Prüft Übergänge: Lücken? Stilbrüche?
-    ↓
-7. GlobalCritic:
-   - Bewertet Gesamtszene vs. Ziel
-   - Gibt QualityScore (0-1) + Issues zurück
-    ↓
-8. Scene State speichern
-```
+## User-Interaktion
 
----
+Das System soll später starke User-Kontrolle erlauben:
+- Regionen auswählen
+- einzelne Objekte auswählen
+- Objekte sperren/freigeben
+- nur markierte Bereiche von KI bearbeiten lassen
+- manuelle Overrides setzen
+- lokale Reparaturen anfordern
+- Änderungen nachvollziehen
 
-## Tech Stack
+Wenn User-Edits existieren, müssen diese respektiert werden.
 
-| Was | Womit |
-|---|---|
-| Language | TypeScript |
-| Bundler | Vite |
-| 3D Engine | Three.js |
-| KI | OpenAI API (GPT-4o / GPT-5.x) |
-| Hosting | GitHub Pages |
-| CI/CD | GitHub Actions |
-| Persistenz | localStorage |
+## Entwicklungsstrategie
 
----
+Immer phasenweise arbeiten.
 
-## Development
+Regel:
+- Erst eine Phase stabil machen.
+- Dann nächste Phase anfangen.
+- Wenn Ergebnisse nicht den Anforderungen entsprechen, in der aktuellen Phase bleiben und dort nachbessern.
 
-```bash
-npm install          # Dependencies
-npm run dev          # Lokaler Dev-Server
-npm run build        # Production Build
-git push origin main # Auto-Deploy via GitHub Actions
-```
+Keine Scheinfortschritte.
+Keine Features halb einbauen.
+Keine Komplexität vorziehen, wenn das Fundament noch nicht sitzt.
 
----
+## Implementierungsstil
 
-## Nächste Implementierungsschritte
+- modular
+- klar getrennte Verantwortlichkeiten
+- strukturierte Datenmodelle
+- nachvollziehbare Manager/Registries
+- kleine, belastbare Schritte
+- lieber vorbereitet als pseudokomplex
+- keine unnötige Magie
 
-1. **Renderer für Sphere + Cylinder** – Three.js Meshes für die neuen Primitive-Typen
-2. **Parallele Pipeline in UI einbinden** – Button/Toggle für parallelen Modus
-3. **RepairAgent** – Automatische Korrektur von Merge-Konflikten und Boundary-Gaps
-4. **Partitioner-Qualität verbessern** – Bessere Prompts, Fallback-Strategien
-5. **Parallele Ausführung aktivieren** – `Promise.all()` statt sequentiell, Performance messen
+## Bevorzugte Arbeitsweise in Claude Code
+
+- Erst analysieren.
+- Dann Datenmodell und Verantwortlichkeiten festlegen.
+- Danach implementieren.
+- Dokumentation parallel aktualisieren.
+- Am Ende klar sagen:
+  - was fertig ist,
+  - was noch fehlt,
+  - was bewusst nicht Teil der aktuellen Phase ist.
+
+## Spätere Subagents
+
+Das Projekt soll später gut zu spezialisierten Rollen passen, z. B.:
+- planner
+- object-spec-builder
+- asset-selector
+- constraint-agent
+- repair-agent
+- docs-agent
+
+Subagents sollen spezialisierte Aufgaben übernehmen und Kontext sauber trennen.

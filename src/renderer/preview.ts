@@ -134,10 +134,16 @@ function createGeometry(p: Primitive): THREE.BufferGeometry {
 
 function createMesh(p: Primitive): THREE.Mesh {
   const geo = createGeometry(p);
+
+  // Terrain-Primitives: etwas rauer, Curves: glatter
+  const isTerrain = p.tags.includes("terrain") || p.tags.includes("hill");
+  const isCurve = p.tags.includes("curve");
+
   const mat = new THREE.MeshStandardMaterial({
     color: new THREE.Color(p.color),
-    roughness: 0.7,
-    metalness: 0.1,
+    roughness: isTerrain ? 0.9 : isCurve ? 0.4 : 0.7,
+    metalness: isCurve ? 0.2 : 0.1,
+    flatShading: isTerrain, // Terrain bekommt Flat-Shading für mehr Kontrast
   });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.position.set(p.position[0], p.position[1], p.position[2]);
@@ -149,6 +155,15 @@ function createMesh(p: Primitive): THREE.Mesh {
   mesh.castShadow = true;
   mesh.receiveShadow = true;
   return mesh;
+}
+
+// ─── Renderer Screenshot (für Global-Critic) ────────────────
+
+export function captureScreenshot(): string | null {
+  if (!renderer) return null;
+  updateCamera();
+  renderer.render(threeScene, camera);
+  return renderer.domElement.toDataURL("image/png");
 }
 
 // Alles entfernen

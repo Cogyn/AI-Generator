@@ -5,9 +5,13 @@ import type {
   Scene,
   ScenePartition,
   WorkRegion,
+  WorkRegionExt,
   RegionAssignment,
   AABB,
   Primitive,
+  MeshOperation,
+  AssemblyConfig,
+  AssemblyRule,
 } from "../../core/types.js";
 import { callLLM } from "../../ai/client.js";
 
@@ -73,27 +77,28 @@ export async function partitionWithAI(
 ): Promise<ScenePartition> {
   const systemPrompt = `You are a 3D object decomposer. Given a build goal, split the object into 2-5 SEMANTIC parts.
 Each part will be built INDEPENDENTLY by a separate builder in its own local coordinate space (centered at origin).
-After building, a Combiner will scale and position the parts to form the complete object.
+After building, an Assembly Resolver will algorithmically place parts using your assemblyRules.
 
 IMPORTANT: Think about the object's STRUCTURAL components, not spatial regions.
+IMPORTANT: You MUST provide assemblyRules that describe how parts connect spatially.
 
-EXAMPLE: "Build an airplane"
-Parts:
-- "fuselage": The main body/tube of the airplane
-- "wings": The two main wings (as a pair)
-- "tail": Tail fins and horizontal stabilizer
-- "landing-gear": The wheels/struts underneath
+SPATIAL RELATIONS: "on_top_of", "below", "beside_left", "beside_right", "in_front_of", "behind", "inside", "attached_to", "surrounds"
+ALIGNMENT ANCHORS: "center", "corner_nw", "corner_ne", "corner_sw", "corner_se", "edge_left", "edge_right", "edge_front", "edge_back"
+MULTI-INSTANCE PATTERNS: "corners" (e.g. 4 table legs), "edges", "ring", "linear"
 
 EXAMPLE: "Build a table"
-Parts:
-- "tabletop": The flat surface on top
-- "legs": The four legs underneath
+Parts: tabletop, legs
+assemblyRules:
+- tabletop: parentPartId="ground", relation="on_top_of", alignment="center", priority=1
+- legs: parentPartId="tabletop", relation="below", alignment="center", priority=2, multiInstance={count:4, pattern:"corners"}
 
 RULES:
 - Each part should be a self-contained component that makes sense on its own.
 - 2-5 parts for most objects. Don't over-split.
 - Each part gets 3-10 primitives max.
 - Give each part a clear, specific build goal.
+- The first rule (lowest priority number) is the ROOT part that anchors the whole assembly.
+- contactRequired=true means the child MUST touch the parent (no floating).
 
 Respond with ONLY valid JSON:
 {
@@ -103,19 +108,23 @@ Respond with ONLY valid JSON:
   "parts": [
     {"id": "part-id", "label": "Human Label", "goal": "what to build for this part", "maxPrimitives": N, "priority": 1},
     ...
+  ],
+  "assemblyRules": [
+    {"partId": "part-id", "parentPartId": "other-part-id|ground", "relation": "on_top_of", "alignment": "center", "priority": 1, "contactRequired": true},
+    ...
   ]
 }`;
 
-  const raw = await callLLM(systemPrompt, `Decompose into parts: "${userPrompt}". Scene has ${scene.primitives.length} existing primitives.`);
   try {
+    const raw = await callLLM(systemPrompt, `Decompose into parts: "${userPrompt}". Scene has ${scene.primitives.length} existing primitives.`);
     const parsed = JSON.parse(raw);
     if (validatePartition(parsed)) {
       return partsToPartition(parsed, userPrompt);
     }
-    return heuristicPartition(userPrompt) ?? createSingleRegionPartition(userPrompt);
   } catch {
-    return heuristicPartition(userPrompt) ?? createSingleRegionPartition(userPrompt);
+    // callLLM oder JSON-Parse fehlgeschlagen — weiter zu Heuristik
   }
+  return heuristicPartition(userPrompt) ?? createSingleRegionPartition(userPrompt);
 }
 
 // Konvertiert LLM-Parts-Format in ScenePartition
@@ -132,6 +141,30 @@ function partsToPartition(parsed: any, userPrompt: string): ScenePartition {
     });
   }
 
+  // Parse assemblyRules into AssemblyConfig
+  let assemblyConfig: AssemblyConfig | undefined;
+  if (parsed.assemblyRules && Array.isArray(parsed.assemblyRules) && parsed.assemblyRules.length > 0) {
+    const rules: AssemblyRule[] = parsed.assemblyRules.map((r: any) => ({
+      partId: r.partId,
+      parentPartId: r.parentPartId ?? "ground",
+      relation: r.relation ?? "on_top_of",
+      alignment: r.alignment ?? "center",
+      offset: r.offset,
+      rotationHint: r.rotationHint,
+      scaleFactor: r.scaleFactor,
+      priority: r.priority ?? 1,
+      contactRequired: r.contactRequired ?? true,
+      multiInstance: r.multiInstance,
+    }));
+    // Root is the part with lowest priority
+    const sorted = [...rules].sort((a, b) => a.priority - b.priority);
+    assemblyConfig = {
+      rootPartId: sorted[0].partId,
+      rules,
+      groundPlane: 0,
+    };
+  }
+
   return {
     regions,
     assignments,
@@ -140,11 +173,12 @@ function partsToPartition(parsed: any, userPrompt: string): ScenePartition {
       colorPalette: parsed.colorPalette,
       styleTags: parsed.styleTags,
     },
+    assemblyConfig,
   };
 }
 
 // Keyword-basierte Heuristik
-function heuristicPartition(userPrompt: string): ScenePartition | null {
+export function heuristicPartition(userPrompt: string): ScenePartition | null {
   const lower = userPrompt.toLowerCase();
 
   if (lower.includes("flugzeug") || lower.includes("airplane") || lower.includes("plane") || lower.includes("jet")) {
@@ -158,6 +192,12 @@ function heuristicPartition(userPrompt: string): ScenePartition | null {
         { id: "tail", label: "Leitwerk", goal: "Build the tail section: a vertical tail fin (thin tall cube) and horizontal stabilizers (thin flat cubes). Build centered at origin.", maxPrimitives: 5, priority: 3 },
         { id: "landing-gear", label: "Fahrwerk", goal: "Build landing gear: 2-3 thin vertical cylinders as struts with small spheres or cylinders as wheels. Build centered at origin.", maxPrimitives: 6, priority: 4 },
       ],
+      assemblyRules: [
+        { partId: "fuselage", parentPartId: "ground", relation: "on_top_of", alignment: "center", priority: 1, contactRequired: true },
+        { partId: "wings", parentPartId: "fuselage", relation: "attached_to", alignment: "center", priority: 2, contactRequired: true },
+        { partId: "tail", parentPartId: "fuselage", relation: "behind", alignment: "center", priority: 3, contactRequired: true },
+        { partId: "landing-gear", parentPartId: "fuselage", relation: "below", alignment: "center", priority: 4, contactRequired: true, multiInstance: { count: 2, pattern: "linear", spacing: 4 } },
+      ],
     }, userPrompt);
   }
 
@@ -167,7 +207,11 @@ function heuristicPartition(userPrompt: string): ScenePartition | null {
       colorPalette: ["#8B4513", "#A0522D", "#DEB887"],
       parts: [
         { id: "tabletop", label: "Tischplatte", goal: "Build a flat rectangular tabletop as a single wide, thin cube centered at origin.", maxPrimitives: 3, priority: 1 },
-        { id: "legs", label: "Tischbeine", goal: "Build 4 table legs as thin vertical cylinders or cubes, positioned at the four corners. Build centered at origin.", maxPrimitives: 6, priority: 2 },
+        { id: "legs", label: "Tischbeine", goal: "Build a single table leg as a thin vertical cylinder or cube, centered at origin.", maxPrimitives: 2, priority: 2 },
+      ],
+      assemblyRules: [
+        { partId: "tabletop", parentPartId: "ground", relation: "on_top_of", alignment: "center", priority: 1, contactRequired: true },
+        { partId: "legs", parentPartId: "tabletop", relation: "below", alignment: "center", priority: 2, contactRequired: true, multiInstance: { count: 4, pattern: "corners" } },
       ],
     }, userPrompt);
   }
@@ -178,7 +222,11 @@ function heuristicPartition(userPrompt: string): ScenePartition | null {
       colorPalette: ["#8B4513", "#A0522D"],
       parts: [
         { id: "seat", label: "Sitzfläche", goal: "Build a flat square seat as a thin cube, and a tall thin backrest cube behind it. Build centered at origin.", maxPrimitives: 4, priority: 1 },
-        { id: "legs", label: "Stuhlbeine", goal: "Build 4 chair legs as thin vertical cylinders positioned at corners. Build centered at origin.", maxPrimitives: 5, priority: 2 },
+        { id: "legs", label: "Stuhlbeine", goal: "Build a single chair leg as a thin vertical cylinder, centered at origin.", maxPrimitives: 2, priority: 2 },
+      ],
+      assemblyRules: [
+        { partId: "seat", parentPartId: "ground", relation: "on_top_of", alignment: "center", priority: 1, contactRequired: true },
+        { partId: "legs", parentPartId: "seat", relation: "below", alignment: "center", priority: 2, contactRequired: true, multiInstance: { count: 4, pattern: "corners" } },
       ],
     }, userPrompt);
   }
@@ -191,6 +239,10 @@ function heuristicPartition(userPrompt: string): ScenePartition | null {
         { id: "body", label: "Körper", goal: "Build three stacked spheres (large bottom, medium middle, small top) centered at origin, each touching the one above/below.", maxPrimitives: 4, priority: 1 },
         { id: "details", label: "Details", goal: "Build snowman details: two stick arms (thin cylinders angled outward), a carrot nose (small orange cylinder/cone), and a hat (cylinder + cube on top). Build centered at origin.", maxPrimitives: 8, priority: 2 },
       ],
+      assemblyRules: [
+        { partId: "body", parentPartId: "ground", relation: "on_top_of", alignment: "center", priority: 1, contactRequired: true },
+        { partId: "details", parentPartId: "body", relation: "attached_to", alignment: "center", priority: 2, contactRequired: true },
+      ],
     }, userPrompt);
   }
 
@@ -201,6 +253,10 @@ function heuristicPartition(userPrompt: string): ScenePartition | null {
       parts: [
         { id: "structure", label: "Struktur", goal: "Build the main house walls as a box (4 wall cubes or one large cube), with a door opening and window openings. Build centered at origin.", maxPrimitives: 8, priority: 1 },
         { id: "roof", label: "Dach", goal: "Build a pitched roof using two angled cubes (rotated ~25-30 degrees) forming an A-shape, or a flat roof. Build centered at origin.", maxPrimitives: 4, priority: 2 },
+      ],
+      assemblyRules: [
+        { partId: "structure", parentPartId: "ground", relation: "on_top_of", alignment: "center", priority: 1, contactRequired: true },
+        { partId: "roof", parentPartId: "structure", relation: "on_top_of", alignment: "center", priority: 2, contactRequired: true },
       ],
     }, userPrompt);
   }
@@ -215,4 +271,45 @@ export function createSingleRegionPartition(goal: string): ScenePartition {
     assignments: [{ regionId: "main", localGoal: goal, priority: 1 }],
     styleDirectives: { goal },
   };
+}
+
+// ─── Erweiterte Partitionierung mit Mesh-Ops-Support ────────
+
+// Erstellt eine erweiterte WorkRegion mit Mesh-Ops-Metadaten
+export function makeExtendedRegion(
+  id: string,
+  label: string,
+  maxPrimitives: number,
+  opts: {
+    densityLevel?: number;
+    styleConstraint?: string;
+    seedOffset?: number;
+    meshOps?: MeshOperation[];
+  } = {},
+): WorkRegionExt {
+  return {
+    ...makeLocalRegion(id, label, maxPrimitives),
+    meshOps: opts.meshOps ?? [],
+    densityLevel: opts.densityLevel ?? 5,
+    styleConstraint: opts.styleConstraint,
+    seedOffset: opts.seedOffset,
+  };
+}
+
+// KI-gestützte Partitionierung mit Mesh-Operations-Plan
+export async function partitionWithOps(
+  userPrompt: string,
+  scene: Scene,
+): Promise<{ partition: ScenePartition; extRegions: WorkRegionExt[] }> {
+  const partition = await partitionWithAI(userPrompt, scene);
+
+  // Erweitere Regionen mit Default Mesh-Ops-Metadaten
+  const extRegions: WorkRegionExt[] = partition.regions.map((r, i) => ({
+    ...r,
+    meshOps: [],
+    densityLevel: 5,
+    seedOffset: i * 1000,
+  }));
+
+  return { partition, extRegions };
 }

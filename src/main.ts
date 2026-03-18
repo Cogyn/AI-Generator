@@ -15,8 +15,13 @@ const undoBtn = document.getElementById("undo-btn") as HTMLButtonElement;
 const resetBtn = document.getElementById("reset-btn") as HTMLButtonElement;
 const settingsBtn = document.getElementById("settings-btn") as HTMLButtonElement;
 const settingsModal = document.getElementById("settings-modal") as HTMLDivElement;
+const providerSelect = document.getElementById("provider-select") as HTMLSelectElement;
+const openaiSettingsDiv = document.getElementById("openai-settings") as HTMLDivElement;
+const anthropicSettingsDiv = document.getElementById("anthropic-settings") as HTMLDivElement;
 const apiKeyInput = document.getElementById("api-key-input") as HTMLInputElement;
 const modelSelect = document.getElementById("model-select") as HTMLSelectElement;
+const anthropicKeyInput = document.getElementById("anthropic-key-input") as HTMLInputElement;
+const anthropicModelSelect = document.getElementById("anthropic-model-select") as HTMLSelectElement;
 const saveSettingsBtn = document.getElementById("save-settings") as HTMLButtonElement;
 const closeSettingsBtn = document.getElementById("close-settings") as HTMLButtonElement;
 const parallelToggle = document.getElementById("parallel-toggle") as HTMLInputElement;
@@ -53,18 +58,40 @@ if (savedScene) {
   updateExtendButton();
 }
 
-// Restore API key
+// Restore API keys
 const settings = getSettings();
-if (settings.apiKey) {
-  apiKeyInput.value = settings.apiKey;
-}
+if (settings.apiKey) apiKeyInput.value = settings.apiKey;
+if (settings.anthropicKey) anthropicKeyInput.value = settings.anthropicKey;
 
 // --- Settings ---
+
+function syncProviderUI(provider: string): void {
+  if (provider === "anthropic") {
+    openaiSettingsDiv.classList.add("hidden");
+    anthropicSettingsDiv.classList.remove("hidden");
+  } else {
+    openaiSettingsDiv.classList.remove("hidden");
+    anthropicSettingsDiv.classList.add("hidden");
+  }
+}
+
+providerSelect.addEventListener("change", () => {
+  syncProviderUI(providerSelect.value);
+});
+
 settingsBtn.addEventListener("click", () => {
   settingsModal.classList.remove("hidden");
   const s = getSettings();
+  providerSelect.value = s.provider;
   apiKeyInput.value = s.apiKey;
-  modelSelect.value = s.model;
+  anthropicKeyInput.value = s.anthropicKey;
+  // Setze das richtige Modell im richtigen Select
+  if (s.provider === "anthropic") {
+    anthropicModelSelect.value = s.model;
+  } else {
+    modelSelect.value = s.model;
+  }
+  syncProviderUI(s.provider);
 });
 
 closeSettingsBtn.addEventListener("click", () => {
@@ -72,9 +99,17 @@ closeSettingsBtn.addEventListener("click", () => {
 });
 
 saveSettingsBtn.addEventListener("click", () => {
-  saveSettings({ apiKey: apiKeyInput.value.trim(), model: modelSelect.value });
+  const provider = providerSelect.value as "openai" | "anthropic";
+  const model = provider === "anthropic" ? anthropicModelSelect.value : modelSelect.value;
+  saveSettings({
+    provider,
+    apiKey: apiKeyInput.value.trim(),
+    anthropicKey: anthropicKeyInput.value.trim(),
+    model,
+  });
   settingsModal.classList.add("hidden");
-  log(`Einstellungen gespeichert (${modelSelect.value})`, "success");
+  const label = provider === "anthropic" ? "Anthropic" : "OpenAI";
+  log(`Einstellungen gespeichert (${label}: ${model})`, "success");
 });
 
 settingsModal.addEventListener("click", (e) => {
@@ -101,7 +136,7 @@ generateBtn.addEventListener("click", async () => {
       updateInfo(result.scene);
       updateExtendButton();
       updateUndoButton();
-      showParallelPlan(result.partition, result.qualityScore);
+      showParallelPlan(result.partition, result.qualityScore, result.tokenUsage, result.planObject);
     } else {
       await startPipeline(prompt, { maxSteps: 10, autoRun: true }, log, onStep);
       finishPipeline();
@@ -131,7 +166,7 @@ extendBtn.addEventListener("click", async () => {
       updateInfo(result.scene);
       updateExtendButton();
       updateUndoButton();
-      showParallelPlan(result.partition, result.qualityScore);
+      showParallelPlan(result.partition, result.qualityScore, result.tokenUsage, result.planObject);
     } else {
       await extendPipeline(prompt, currentScene, { maxSteps: 10, autoRun: true }, log, onStep);
       finishPipeline();
@@ -249,18 +284,42 @@ function updatePlan(state: PipelineState): void {
     .join("");
 }
 
-function showParallelPlan(partition: import("./core/types.js").ScenePartition, qualityScore: number): void {
+function showParallelPlan(
+  partition: import("./core/types.js").ScenePartition,
+  qualityScore: number,
+  tokenUsage?: { total_tokens: number; estimated_cost_usd: number; call_count: number },
+  planObject?: import("./core/types.js").PlanObject,
+): void {
   planSection.classList.remove("hidden");
+
+  // PlanObject-Info anzeigen wenn vorhanden
+  let planInfoHtml = "";
+  if (planObject) {
+    planInfoHtml = `<div class="plan-info">
+      <div class="plan-info-title">Plan: ${planObject.goal}</div>
+      <div class="plan-info-detail">Areas: ${planObject.areas.length} | Builders: ${planObject.builders.length} | Max Prims: ${planObject.cost_targets.max_primitives_total}</div>
+      <div class="plan-info-detail">Quality Target: min ${(planObject.global_quality_targets.min_score * 100).toFixed(0)}%, max ${planObject.global_quality_targets.errors_max} Errors</div>
+    </div>`;
+  }
+
   const regionsHtml = partition.regions.map((r) => {
     const assignment = partition.assignments.find((a) => a.regionId === r.id);
-    return `<div class="plan-region"><span class="plan-region-label">${r.label}</span><span class="plan-region-goal"> — ${assignment?.localGoal ?? ""}</span></div>`;
+    const goalText = assignment?.localGoal ?? "";
+    const shortGoal = goalText.length > 80 ? goalText.slice(0, 77) + "..." : goalText;
+    return `<div class="plan-region"><span class="plan-region-label">${r.label}</span><span class="plan-region-goal"> — ${shortGoal}</span></div>`;
   }).join("");
 
   const pct = Math.round(qualityScore * 100);
   const cls = pct >= 70 ? "good" : pct >= 40 ? "ok" : "bad";
   const qualityHtml = `<div class="plan-quality ${cls}">Quality: ${pct}%</div>`;
 
-  planDisplay.innerHTML = regionsHtml + qualityHtml;
+  // Token-Usage anzeigen
+  let tokenHtml = "";
+  if (tokenUsage && tokenUsage.total_tokens > 0) {
+    tokenHtml = `<div class="plan-tokens">Tokens: ${tokenUsage.total_tokens.toLocaleString()} (${tokenUsage.call_count} Calls, ~$${tokenUsage.estimated_cost_usd.toFixed(4)})</div>`;
+  }
+
+  planDisplay.innerHTML = planInfoHtml + regionsHtml + qualityHtml + tokenHtml;
 }
 
 function log(msg: string, level: "info" | "success" | "warn" | "error" = "info"): void {
