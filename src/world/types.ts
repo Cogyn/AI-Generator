@@ -237,6 +237,61 @@ export interface LockStateSummary {
   ai_allowed_objects: number;
 }
 
+// ─── Object Metrics ─────────────────────────────────────────
+// Per-object detailed measurements for validation and debugging.
+
+export interface HeightMetrics {
+  object_bottom_y: number;
+  object_top_y: number;
+  object_height: number;
+  support_plane_y: number;
+  contact_gap: number;
+  grounded: boolean;
+}
+
+export interface SupportMetrics {
+  support_surface_id: string | null;
+  support_surface_name: string;
+  support_valid: boolean;
+  contact_gap: number;
+  within_bounds: boolean;
+  support_score: number;
+}
+
+export interface ZoneMetrics {
+  preferred_zone: PlacementZoneType;
+  actual_zone: PlacementZoneType;
+  zone_match: boolean;
+  zone_distance: number;        // 0 = perfect, 1 = worst
+  zone_score: number;           // 0-1
+}
+
+export interface OrientationMetrics {
+  rotation: Vec3;
+  snap_valid: boolean;
+  allowed_rotation_valid: boolean;
+  upright: boolean;
+  orientation_score: number;    // 0-1
+}
+
+export interface ObjectMetrics {
+  canonical_name: string;
+  original_name: string;
+  object_id: string;
+  object_type: string;
+  height: HeightMetrics;
+  support: SupportMetrics;
+  zone: ZoneMetrics;
+  orientation: OrientationMetrics;
+}
+
+export interface RequiredObjectMatch {
+  required_name: string;
+  canonical_name: string;
+  matched_object_id: string | null;
+  found: boolean;
+}
+
 // ─── Validation ─────────────────────────────────────────────
 
 export interface WorldValidationResult {
@@ -246,6 +301,9 @@ export interface WorldValidationResult {
   errors: WorldValidationEntry[];
   warnings: WorldValidationEntry[];
   info: WorldValidationEntry[];
+  object_metrics: ObjectMetrics[];
+  required_object_matches: RequiredObjectMatch[];
+  violations_by_category: Record<string, number>;
 }
 
 export interface WorldScoreBreakdown {
@@ -257,12 +315,15 @@ export interface WorldScoreBreakdown {
   proportion_score: number;
   orientation_score: number;
   zone_placement_score: number;
+  height_relation_score: number;
+  semantic_relation_score: number;
 }
 
 export interface WorldValidationEntry {
   check: string;
   message: string;
   target_id?: string;
+  category?: string;
 }
 
 // ─── Serialization ──────────────────────────────────────────

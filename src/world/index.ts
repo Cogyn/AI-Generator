@@ -26,6 +26,12 @@ export type {
   WorldValidationResult,
   WorldScoreBreakdown,
   WorldValidationEntry,
+  ObjectMetrics,
+  HeightMetrics,
+  SupportMetrics,
+  ZoneMetrics,
+  OrientationMetrics,
+  RequiredObjectMatch,
 } from "./types";
 
 // WorldState Manager
@@ -88,6 +94,11 @@ export {
 export {
   validateWorldState,
   extractRequiredObjects,
+  normalizeObjectName,
+  canonicalObjectName,
+  namesMatch,
+  computeActualZone,
+  computeAllObjectMetrics,
 } from "./validation";
 
 // Serialization
@@ -108,6 +119,7 @@ export {
   debugSupportChain,
   debugFullReport,
   debugPlacementRules,
+  debugObjectMetrics,
 } from "./debug";
 
 // Seed
